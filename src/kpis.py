@@ -11,8 +11,9 @@ KPI 1  events_per_day        Nº de eventos procesados en el día.              
        Interpretación: volumen de actividad ingerido; base de los demás KPIs.
 
 KPI 2  daily_growth_pct      Crecimiento diario de eventos.                            [Cassandra]
-       Fórmula: (events(D) - events(D-1)) / events(D-1) * 100, comparando las MISMAS horas
-       (si D está parcialmente cargado hasta la hora h, D-1 se suma solo hasta h).
+       Fórmula: (events_H(D) - events_H(D-1)) / events_H(D-1) * 100, donde H son las horas
+       cargadas en AMBOS días (un día parcial, o una carga histórica a medias, se compara
+       contra el mismo tramo del día anterior). Sin datos de D-1 el KPI queda nulo (no 0 %).
        Interpretación: >0 la actividad crece respecto al día anterior.
 
 KPI 3  avg_events_per_user   Promedio de actividad por usuario.                        [Cassandra]
@@ -66,19 +67,30 @@ def pr_actions_from_mongo(d: date) -> Counter:
     return Counter({(r["_id"] or "unknown"): r["n"] for r in mongo_db().events.aggregate(pipeline)})
 
 
+def growth_kpi(s, d: date, today: Counter | None = None) -> dict:
+    today = today if today is not None else _day_counts(s, d)
+    prev = d - timedelta(days=1)
+    yesterday = _day_counts(s, prev)
+    common = sorted({h for (h, t) in today} & {h for (h, t) in yesterday})
+    events_today = sum(n for (h, t), n in today.items() if h in common)
+    events_yesterday = sum(n for (h, t), n in yesterday.items() if h in common)
+    if not events_yesterday:
+        return {"kpi_name": "daily_growth_pct", "kpi_value": None, "kpi_label": f"sin datos de {prev}"}
+    contiguous = common[-1] - common[0] + 1 == len(common)
+    span = f"horas {common[0]}–{common[-1]}" if contiguous else f"{len(common)} horas comunes"
+    growth = (events_today - events_yesterday) / events_yesterday * 100
+    return {"kpi_name": "daily_growth_pct", "kpi_value": round(growth, 2), "kpi_label": f"vs {prev} ({span})"}
+
+
 def compute_kpis(d: date) -> list[dict]:
     s = cassandra_session()
     today = _day_counts(s, d)
-    yesterday = _day_counts(s, d - timedelta(days=1))
 
     # --- Cassandra
     events_today = sum(today.values())
-    max_hour = max((h for (h, t) in today), default=23)
-    # Día parcial: comparar contra las mismas horas del día anterior
-    events_yesterday = sum(n for (h, t), n in yesterday.items() if h <= max_hour)
+    growth = growth_kpi(s, d, today)
     row = s.execute("SELECT unique_users FROM daily_totals WHERE year=%s AND event_date=%s", (d.year, d)).one()
     unique_users = row.unique_users if row else 0
-    growth = ((events_today - events_yesterday) / events_yesterday * 100) if events_yesterday else 0.0
     avg_per_user = events_today / unique_users if unique_users else 0.0
 
     # --- MongoDB
@@ -104,7 +116,7 @@ def compute_kpis(d: date) -> list[dict]:
 
     return [
         {"kpi_name": "events_per_day", "kpi_value": float(events_today), "kpi_label": "eventos"},
-        {"kpi_name": "daily_growth_pct", "kpi_value": round(growth, 2), "kpi_label": f"vs {d - timedelta(days=1)} (horas 0–{max_hour})"},
+        growth,
         {"kpi_name": "avg_events_per_user", "kpi_value": round(avg_per_user, 3), "kpi_label": f"{unique_users} usuarios"},
         {"kpi_name": "pr_merge_rate_pct", "kpi_value": round(merge_rate, 2), "kpi_label": f"{merged} merged / {closed} cerrados sin fusionar"},
         {"kpi_name": "top_repo_connections", "kpi_value": float(top_degree), "kpi_label": top_repo},

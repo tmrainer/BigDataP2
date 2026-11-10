@@ -29,7 +29,8 @@ def run_hour(hour: datetime):
     meta = generate_kpis(meta)
     print("\n=== KPIs", hour.date(), "===")
     for k in meta["kpis"]:
-        print(f"  {k['kpi_name']:<22} {k['kpi_value']:>12}  {k['kpi_label']}")
+        value = "n/d" if k["kpi_value"] is None else k["kpi_value"]
+        print(f"  {k['kpi_name']:<22} {value:>12}  {k['kpi_label']}")
     return meta
 
 
