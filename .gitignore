@@ -1,0 +1,7 @@
+.env
+data/raw/*.gz
+data/processed/*
+logs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
