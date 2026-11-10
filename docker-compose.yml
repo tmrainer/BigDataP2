@@ -1,0 +1,253 @@
+## Stack del Proyecto Grupal II - Big Data (UTEC)
+## TODO corre en Docker, en un solo host (VM e2-standard-4 de GCP o laptop con >= 12 GB RAM):
+##   mongo         MongoDB 7        documentos originales (eventos JSON)
+##   cassandra     Cassandra 4.1    series temporales / agregados / KPIs
+##   neo4j         Neo4j 5          grafo Usuario -> Repo -> Org
+##   postgres      metadata de Airflow
+##   airflow-*     orquestación (DAG de 6 etapas, cada hora)
+##   jupyter       exploración + notebooks CRUD (demo del video)
+##   dashboard     Streamlit conectado a las 3 BDs
+##   mongo-express UI web de MongoDB (opcional, para la demo)
+##
+## Uso:
+##   cp .env.example .env
+##   docker compose up -d
+##   docker compose logs -f airflow-init   (esperar "Airflow inicializado")
+##
+## Los contenedores se hablan por nombre de servicio (mongo, cassandra, neo4j); por eso aquí se
+## sobreescriben las URIs. El .env conserva valores "localhost" para usarlos desde el host.
+
+x-db-env: &db-env
+  MONGO_URI: mongodb://mongo:27017
+  MONGO_DB: ${MONGO_DB:-github_events}
+  CASSANDRA_HOST: cassandra
+  CASSANDRA_KEYSPACE: ${CASSANDRA_KEYSPACE:-github_metrics}
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-bigdata2026}
+  NEO4J_DATABASE: neo4j
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.airflow
+  env_file: .env
+  environment:
+    <<: *db-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "30"
+    PYTHONPATH: /opt/airflow/src
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/opt/airflow/src
+    - ./data:/opt/airflow/data
+    - airflow-logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+    mongo:
+      condition: service_healthy
+    cassandra:
+      condition: service_healthy
+    neo4j:
+      condition: service_healthy
+
+services:
+
+  # ------------------------------------------------------------------ MongoDB
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    hostname: mongo
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.5", "--quiet"]
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    mem_limit: 1500m
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: mongo-express
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
+      ME_CONFIG_BASICAUTH: "false"
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Cassandra
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
+    hostname: cassandra
+    ports:
+      - "127.0.0.1:9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: bigdata_cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      # Limitar memoria para convivir con el resto del stack en 16 GB
+      MAX_HEAP_SIZE: 2G
+      HEAP_NEWSIZE: 400M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ./scripts:/scripts:ro
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------- Neo4j
+  neo4j:
+    image: neo4j:5
+    container_name: neo4j
+    hostname: neo4j
+    ports:
+      - "127.0.0.1:7474:7474"     # Neo4j Browser (UI web)
+      - "127.0.0.1:7687:7687"     # Bolt (driver)
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-bigdata2026}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+    volumes:
+      - neo4j-data:/data
+    mem_limit: 2500m
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-bigdata2026} 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  # ------------------------------------------------- Postgres (metadata Airflow)
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ Airflow
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin --lastname UTEC --role Admin \
+          --email admin@example.com || true
+        echo "Airflow inicializado"
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ Jupyter
+  jupyter:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.jupyter
+    container_name: jupyter
+    env_file: .env
+    environment:
+      <<: *db-env
+      PYTHONPATH: /home/jovyan/work/src
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-bigdata}
+    ports:
+      - "127.0.0.1:8888:8888"
+    volumes:
+      - ./:/home/jovyan/work
+    depends_on:
+      mongo:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: dashboard
+    env_file: .env
+    environment:
+      <<: *db-env
+      PYTHONPATH: /app/src
+    ports:
+      - "8501:8501"          # público en la VM (regla de firewall allow-dashboard-8501)
+    volumes:
+      - ./dashboard:/app/dashboard
+      - ./src:/app/src
+    depends_on:
+      mongo:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  cassandra-data:
+  neo4j-data:
+  postgres-data:
+  airflow-logs:
