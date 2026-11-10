@@ -1,18 +1,16 @@
-"""Dashboard analítico - Streamlit
-Conecta las 3 bases de datos:
-  * Cassandra  -> series temporales, agregados y KPIs
-  * Neo4j      -> grafo usuario-repositorio (conexiones)
-  * MongoDB    -> documentos originales (eventos crudos)
+"""Dashboard analítico (Streamlit) sobre MongoDB, Cassandra y Neo4j. Horas en UTC.
 Ejecutar: streamlit run dashboard/app.py
 """
 from __future__ import annotations
 
+import html
+import math
+import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -20,84 +18,212 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config  # noqa: E402
 
 # ------------------------------------------------------------------ estilo
-# Paleta categórica en orden fijo (validada para daltonismo) + secuencial azul.
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
-SEQ = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#1c5cab", "#0d366b"]
-INK, INK2, MUTED, GRID = "#111111", "#3b3f46", "#5f6572", "#d6d8dd"
+INK, INK2, MUTED, GRID, AXIS = "#0b0b0b", "#3b3f46", "#6b6f78", "#e6e7ea", "#c3c2b7"
+OTHER = "#c3c2b7"
+ACCENT, ACCENT_SOFT = "#2a78d6", "#9ec5f4"
+POS, NEG = "#2a78d6", "#e34948"
 FONT = "IBM Plex Sans, Inter, Segoe UI, system-ui, sans-serif"
-DB_COLOR = {"Cassandra": "#2a78d6", "MongoDB": "#008300", "Neo4j": "#6250d6"}   # mismos tonos que las series 1, 6 y 7
+DB_COLOR = {"Cassandra": "#2a78d6", "MongoDB": "#008300", "Neo4j": "#6250d6"}
+
+EVENT_ES = {
+    "PullRequestEvent": "Pull request", "IssuesEvent": "Issue", "IssueCommentEvent": "Comentario en issue/PR",
+    "PullRequestReviewEvent": "Revisión de PR", "PullRequestReviewCommentEvent": "Comentario de revisión",
+    "WatchEvent": "Estrella", "PushEvent": "Push", "CreateEvent": "Creación de rama/tag",
+    "DeleteEvent": "Borrado de rama/tag", "ReleaseEvent": "Release", "ForkEvent": "Fork",
+    "MemberEvent": "Alta de colaborador", "CommitCommentEvent": "Comentario en commit",
+    "PublicEvent": "Repositorio hecho público", "GollumEvent": "Edición de wiki", "DiscussionEvent": "Discusión",
+    "SponsorshipEvent": "Patrocinio",
+}
+# Orden validado para daltonismo; el color sigue al tipo, no a su posición en el ranking
+TYPE_ORDER = ["PullRequestEvent", "IssuesEvent", "IssueCommentEvent", "PullRequestReviewEvent", "WatchEvent",
+              "PushEvent", "CreateEvent", "DeleteEvent"]
+TYPE_COLOR = dict(zip(TYPE_ORDER, SERIES))
+
+REL_ES = {"OPENED_PR": "Abrió PR", "OPENED_ISSUE": "Abrió issue", "PUSHED": "Push", "FORKED": "Fork", "STARRED": "Estrella"}
+REL_COLOR = dict(zip(REL_ES, SERIES))
+
+PR_ACTION_ES = {
+    "opened": "Abierto", "merged": "Fusionado", "closed": "Cerrado sin fusionar", "reopened": "Reabierto",
+    "labeled": "Etiquetado", "unlabeled": "Etiqueta retirada", "assigned": "Asignado", "unassigned": "Asignación retirada",
+    "synchronize": "Sincronizado", "edited": "Editado", "review_requested": "Revisión solicitada",
+    "review_request_removed": "Solicitud de revisión retirada", "ready_for_review": "Listo para revisión",
+    "converted_to_draft": "Pasado a borrador", "unknown": "Sin acción",
+}
+
+MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+
+KPI_DEF = [
+    dict(no=1, key="events_per_day", name="Eventos procesados", db="Cassandra", table="events_by_hour",
+         definition="Número de eventos públicos de GitHub procesados por el pipeline en el día (UTC).",
+         formula="Σ events_by_hour.event_count  (event_date = D)",
+         reading="Volumen de actividad ingerido; base de los demás indicadores. En un día parcial depende de las horas cargadas."),
+    dict(no=2, key="daily_growth_pct", name="Crecimiento diario", db="Cassandra", table="events_by_hour",
+         definition="Variación porcentual del volumen respecto del día anterior, sobre las horas cargadas en ambos días.",
+         formula="(E_D(H) − E_D−1(H)) / E_D−1(H) × 100,  H = horas presentes en D y D−1",
+         reading="> 0: la actividad crece; < 0: disminuye. Sin datos del día anterior no se calcula (N/D)."),
+    dict(no=3, key="avg_events_per_user", name="Eventos por usuario", db="Cassandra", table="daily_totals",
+         definition="Promedio de eventos por usuario activo (actor distinto) en el día.",
+         formula="E_D / daily_totals.unique_users(D)",
+         reading="Intensidad de uso. Valores altos señalan cuentas muy activas o automatizadas (bots)."),
+    dict(no=4, key="pr_merge_rate_pct", name="Tasa de fusión de PR", db="MongoDB", table="payload.action",
+         definition="Porcentaje de los pull requests cerrados en el día que fueron fusionados (aceptados).",
+         formula="merged_D / (merged_D + closed_D) × 100,  según payload.action",
+         reading="Salud del flujo de contribución. Solo se calcula desde el documento original: Cassandra no guarda payload.action."),
+    dict(no=5, key="top_repo_connections", name="Repositorio más conectado", db="Neo4j", table="(:User)-[]->(:Repo)",
+         definition="Repositorio con más usuarios distintos conectados (grado del nodo) en el grafo acumulado.",
+         formula="MATCH (u:User)-[]->(r:Repo) RETURN r, count(DISTINCT u) ORDER BY 2 DESC LIMIT 1",
+         reading="Proyecto que concentra comunidad; un grado anómalo puede delatar actividad automatizada."),
+]
+
 LAYOUT = dict(
-    template="simple_white",
-    font=dict(family=FONT, color=INK2, size=14),
-    title=dict(font=dict(size=18, color=INK, family=FONT), x=0, xanchor="left"),
-    margin=dict(l=8, r=16, t=44, b=8),
-    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-    xaxis=dict(showgrid=False, linecolor="#9a9ea8", tickfont=dict(color=INK2, size=13)),
-    yaxis=dict(gridcolor=GRID, showline=False, tickfont=dict(color=INK2, size=13), zeroline=False),
-    hoverlabel=dict(bgcolor="#ffffff", font=dict(color=INK, size=14, family=FONT)),
-    legend=dict(orientation="h", y=-0.28, yanchor="top", x=0, font=dict(color=INK2, size=13)),
+    font=dict(family=FONT, color=INK2, size=13),
+    margin=dict(l=4, r=8, t=8, b=4),
+    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff", separators=".,",
+    hoverlabel=dict(bgcolor="#ffffff", bordercolor="#c9ccd3", font=dict(color=INK, size=13, family=FONT), align="left"),
+    xaxis=dict(showgrid=False, showline=True, linecolor=AXIS, ticks="", tickfont=dict(color=INK2, size=12),
+               title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=True, automargin=True),
+    yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False, showline=False, tickfont=dict(color=INK2, size=12),
+               title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=True, automargin=True),
+    legend=dict(orientation="h", x=0, xanchor="left", y=1.02, yanchor="bottom", font=dict(color=INK2, size=12),
+                bgcolor="rgba(0,0,0,0)", itemclick=False, itemdoubleclick=False),
+    showlegend=False,
 )
+PLOTLY_CONFIG = {"displayModeBar": False}
 
 CSS = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] * { font-family: 'IBM Plex Sans', Inter, 'Segoe UI', system-ui, sans-serif; }
-[data-testid="stAppViewContainer"] { color: #111111; }
-.block-container { padding-top: 1.6rem; padding-bottom: 2rem; max-width: 1500px; }
-h1 { font-size: 2.1rem !important; font-weight: 700 !important; color: #111111 !important; letter-spacing: -0.01em; margin-bottom: 0.2rem !important; }
-h2, h3 { color: #111111 !important; font-weight: 600 !important; }
-p, li, label, .stMarkdown { font-size: 1.02rem; line-height: 1.5; }
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { font-size: 0.95rem !important; color: #3b3f46 !important; }
-button[data-baseweb="tab"] p { font-size: 1.08rem !important; font-weight: 600 !important; color: #3b3f46; }
-button[data-baseweb="tab"][aria-selected="true"] p { color: #1f4e9c; }
-[data-testid="stWidgetLabel"] p { font-size: 0.95rem !important; font-weight: 600; color: #3b3f46; text-transform: uppercase; letter-spacing: 0.04em; }
-.kpi { background: #f2f4f8; border-radius: 10px; padding: 14px 18px 12px 18px; min-height: 158px; border: 1px solid #e3e6ec; }
-.kpi-label { font-size: 0.9rem; font-weight: 600; color: #3b3f46; text-transform: uppercase; letter-spacing: 0.05em; }
-.kpi-value { font-size: 2.5rem; font-weight: 700; color: #111111; line-height: 1.15; margin: 4px 0 2px 0; font-variant-numeric: tabular-nums; word-break: break-all; }
-.kpi-note { font-size: 1rem; color: #1f2937; }
-.kpi-src { font-size: 0.85rem; color: #5f6572; margin-top: 8px; }
-.kpi-src code { font-size: 0.82rem; }
-[data-testid="stTable"] table { font-size: 1rem; border-collapse: collapse; }
-[data-testid="stTable"] th { font-weight: 700 !important; color: #111111 !important; background: #f2f4f8; border-bottom: 2px solid #9a9ea8 !important; text-align: left; }
-[data-testid="stTable"] td { color: #111111; border-bottom: 1px solid #e3e6ec !important; font-variant-numeric: tabular-nums; }
-[data-testid="stTable"] tbody tr:nth-child(even) td { background: #fafbfc; }
-[data-testid="stMetricValue"] { font-size: 2.2rem; font-weight: 700; color: #111111; }
-[data-testid="stMetricLabel"] p { font-size: 0.95rem !important; font-weight: 600; color: #3b3f46; }
+:root { --ink:#0b0b0b; --ink2:#3b3f46; --muted:#6b6f78; --hair:#e6e7ea; --hair2:#d5d8de; --panel:#f6f7f9; --brand:#1f4e9c; --data:#2a78d6; }
+html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] * { font-family:'IBM Plex Sans', Inter, 'Segoe UI', system-ui, sans-serif; }
+[data-testid="stIconMaterial"] { font-family:'Material Symbols Rounded' !important; }
+code, pre, pre *, [data-testid="stCode"] * { font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace !important; }
+[data-testid="stAppDeployButton"] { display:none; }
+[data-testid="stAppViewContainer"] { color:var(--ink); }
+.block-container { padding-top:2.4rem; padding-bottom:3rem; max-width:1480px; }
+[data-testid="stWidgetLabel"] p { font-size:.78rem !important; font-weight:600; color:var(--ink2); text-transform:uppercase; letter-spacing:.05em; }
+[data-testid="stTab"] p { font-size:1rem !important; font-weight:600 !important; color:var(--ink2); }
+[data-testid="stTab"][aria-selected="true"] p { color:var(--brand); }
+[data-testid="stExpander"] summary p { font-weight:600; color:var(--ink2); }
+code { font-size:.86em; color:var(--ink2); background:var(--panel); padding:1px 5px; border-radius:4px; }
+.hdr { border-bottom:1px solid var(--hair2); padding-bottom:16px; }
+.overline { font-size:.76rem; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--brand); }
+.title { font-size:2rem; font-weight:700; color:var(--ink); letter-spacing:-.015em; line-height:1.15; margin:6px 0; }
+.lede { font-size:1rem; color:var(--ink2); margin:0; max-width:92ch; line-height:1.5; }
+.meta { display:flex; flex-wrap:wrap; gap:6px 26px; margin-top:12px; font-size:.88rem; color:var(--ink); }
+.meta b { color:var(--muted); font-weight:600; margin-right:6px; text-transform:uppercase; font-size:.7rem; letter-spacing:.07em; }
+.sec { margin-top:26px; padding-top:16px; border-top:1px solid var(--hair); }
+.sec .h { font-size:1.2rem; font-weight:600; color:var(--ink); }
+.sec .p { font-size:.9rem; color:var(--muted); margin-top:2px; max-width:120ch; line-height:1.45; }
+.tab-lead { font-size:.92rem; color:var(--ink2); margin:4px 0 0; max-width:125ch; line-height:1.5; }
+.fig-t { font-size:1rem; font-weight:600; color:var(--ink); margin-top:2px; }
+.fig-t .n { color:var(--muted); margin-right:8px; font-size:.76rem; letter-spacing:.06em; text-transform:uppercase; }
+.fig-s { font-size:.84rem; color:var(--muted); margin-top:1px; }
+.fig-note { font-size:.84rem; color:var(--ink2); line-height:1.5; border-left:2px solid var(--hair2); padding:1px 0 1px 10px; }
+.fig-note b { color:var(--ink); font-weight:600; }
+.fig-note .src { color:var(--muted); }
+.tiles { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:14px; }
+@media (max-width:1180px) { .tiles { grid-template-columns:repeat(3, minmax(0, 1fr)); } }
+@media (max-width:720px) { .tiles { grid-template-columns:1fr; } }
+.tile { background:#fff; border:1px solid var(--hair2); border-top:4px solid var(--db); border-radius:8px; padding:13px 16px 11px; display:flex; flex-direction:column; gap:6px; min-width:0; cursor:help; }
+.tile-no { font-size:.68rem; font-weight:600; color:var(--muted); letter-spacing:.08em; margin-bottom:-4px; }
+.tile-label { font-size:.92rem; font-weight:600; color:var(--ink2); }
+.tile-value { font-size:2.25rem; font-weight:600; color:var(--ink); line-height:1.12; letter-spacing:-.01em; }
+.tile-value .u { font-size:1.2rem; font-weight:500; color:var(--ink2); margin-left:3px; }
+.tile-value.name { font-size:1.45rem; line-height:1.22; overflow-wrap:anywhere; }
+.tile-value.name.long { font-size:1.15rem; }
+.tile-ctx { font-size:.86rem; color:var(--ink2); line-height:1.42; }
+.tile-src { margin-top:auto; padding-top:8px; border-top:1px solid var(--hair); font-size:.76rem; color:var(--muted); display:flex; flex-direction:column; align-items:flex-start; gap:3px; }
+.tile-src code { font-size:.72rem; padding:0 4px; white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.sw { display:inline-block; width:9px; height:9px; border-radius:2px; }
+.up { color:#006300; } .down { color:#d03b3b; } .na { color:var(--muted); }
+.arr { font-size:.5em; vertical-align:.32em; margin-right:4px; }
+.nw { white-space:nowrap; }
+.tiles-foot { display:flex; flex-wrap:wrap; gap:4px 18px; font-size:.8rem; color:var(--muted); }
+.tiles-foot span { display:inline-flex; align-items:center; gap:6px; }
+.badge { display:inline-block; font-size:.7rem; font-weight:600; letter-spacing:.03em; padding:1px 8px; border-radius:999px; border:1px solid var(--hair2); color:var(--ink2); background:var(--panel); white-space:nowrap; vertical-align:1px; }
+.badge.warn { color:#7a4a00; background:#fff4de; border-color:#f0cf8f; }
+.badge.ok { color:#1d5a2e; background:#ecf6ef; border-color:#c5e2cd; }
+.callout { display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; border:1px solid #f0cf8f; background:#fffaf0; border-radius:8px; padding:10px 14px; font-size:.9rem; color:#4d3300; line-height:1.45; }
+.strip { display:inline-flex; gap:1px; vertical-align:middle; }
+.strip i { display:inline-block; width:7px; height:14px; border-radius:1px; background:#e1e3e8; }
+.strip i.on { background:var(--data); }
+.strip i.g { margin-left:3px; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }
+.stat { border:1px solid var(--hair2); border-radius:8px; padding:10px 14px; background:#fff; }
+.stat .l { font-size:.72rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+.stat .v { font-size:1.55rem; font-weight:600; color:var(--ink); line-height:1.25; margin-top:2px; }
+.stat .s { font-size:.8rem; color:var(--ink2); margin-top:2px; line-height:1.4; }
+table.t { width:100%; border-collapse:collapse; font-size:.9rem; }
+table.t th { text-align:left; font-size:.7rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; padding:8px 10px; border-bottom:1px solid #b9bdc6; white-space:nowrap; }
+table.t th.sorted { color:var(--brand); }
+table.t td { padding:7px 10px; border-bottom:1px solid var(--hair); color:var(--ink); vertical-align:middle; }
+table.t tbody tr:last-child td { border-bottom:1px solid #b9bdc6; }
+table.t .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+table.t td.rk { color:var(--muted); width:2.2em; font-variant-numeric:tabular-nums; }
+table.t td.nm { font-weight:500; min-width:9em; }
+table.t td.nw { white-space:nowrap; }
+table.def td { vertical-align:top; font-size:.88rem; line-height:1.45; }
+table.def td code { white-space:normal; }
+.cb { display:flex; align-items:center; justify-content:flex-end; gap:10px; }
+.cb .tr { width:60px; height:6px; background:#eef0f3; border-radius:3px; overflow:hidden; flex:none; }
+.cb .tr span { display:block; height:100%; background:var(--data); border-radius:3px; }
+[data-testid="stCode"] code { font-size:.78rem !important; line-height:1.55 !important; }
+.tnote { font-size:.8rem; color:var(--muted); margin-top:6px; line-height:1.45; }
+.flow { display:flex; flex-wrap:wrap; align-items:stretch; gap:8px; }
+.flow .st { flex:1 1 140px; border:1px solid var(--hair2); border-top:4px solid var(--c); border-radius:8px; padding:10px 12px; background:#fff; }
+.flow .st .k { font-size:.68rem; font-weight:600; color:var(--muted); letter-spacing:.07em; text-transform:uppercase; }
+.flow .st .t { font-size:.95rem; font-weight:600; color:var(--ink); margin-top:2px; }
+.flow .st .d { font-size:.8rem; color:var(--ink2); margin-top:4px; line-height:1.42; }
+.flow .ar { align-self:center; color:var(--muted); }
+ul.notes { margin:4px 0 0 1.1em; padding:0; font-size:.9rem; color:var(--ink2); line-height:1.6; max-width:125ch; }
+.foot { margin-top:34px; padding-top:14px; border-top:1px solid var(--hair2); font-size:.8rem; color:var(--muted); display:flex; flex-wrap:wrap; gap:6px 24px; justify-content:space-between; }
 </style>
 """
 
 
-def table(df: pd.DataFrame, int_cols: list[str] | None = None):
-    """Tabla HTML (st.table) con miles separados; se puede estilizar con CSS, a diferencia de st.dataframe."""
-    cols = int_cols if int_cols is not None else [c for c in df.columns if pd.api.types.is_integer_dtype(df[c])]
-    st.table(df.style.format({c: "{:,.0f}" for c in cols}))
+# ------------------------------------------------------------------ utilidades de formato
+def esc(value) -> str:
+    return html.escape(str(value))
 
 
-def card(col, label, value, note, source, table_ref=""):
-    color = DB_COLOR[source]
-    col.markdown(
-        f'<div class="kpi" style="border-left:6px solid {color}">'
-        f'<div class="kpi-label">{label}</div>'
-        f'<div class="kpi-value">{value}</div>'
-        f'<div class="kpi-note">{note}</div>'
-        f'<div class="kpi-src"><span style="color:{color};font-weight:700">■</span> {source}'
-        + (f' · <code>{table_ref}</code>' if table_ref else "") + '</div></div>',
-        unsafe_allow_html=True)
+def fdate(d: date, weekday: bool = False, year: bool = True) -> str:
+    s = f"{d.day} {MESES[d.month - 1]}" + (f" {d.year}" if year else "")
+    return f"{DIAS[d.weekday()]} {s}" if weekday else s
 
 
-def hbar(x, y, color, title, text=None, hover=None, height=None) -> go.Figure:
-    """Barra horizontal con etiquetas fuera; extiende el eje X para que el texto no se recorte."""
-    fig = go.Figure(go.Bar(x=x, y=y, orientation="h", marker=dict(color=color, cornerradius=4),
-                           text=text if text is not None else x, textposition="outside",
-                           cliponaxis=False, hovertemplate=hover or "%{y}: %{x:,}<extra></extra>"))
-    extra = dict(height=height) if height else {}
-    fig.update_layout(**layout(title=title, showlegend=False, xaxis={"range": [0, float(max(x)) * 1.22]}, **extra))
-    return fig
+def fnum(v: float) -> str:
+    return f"{v:,.0f}" if v < 1e5 else f"{v / 1e3:.1f} mil" if v < 1e6 else f"{v / 1e6:.2f} M"
+
+
+def fdt(ts: datetime) -> str:
+    return f"{fdate(ts.date())}, {ts:%H:%M} UTC"
+
+
+def runs_of(values) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    for v in sorted(values):
+        if out and v == out[-1][1] + 1:
+            out[-1] = (out[-1][0], v)
+        else:
+            out.append((v, v))
+    return out
+
+
+def hours_label(hours) -> str:
+    return ", ".join(f"{a:02d}–{b:02d} h" if a != b else f"{a:02d} h" for a, b in runs_of(hours)) or "ninguna"
+
+
+def hour_strip(hours) -> str:
+    on = set(hours)
+    cells = "".join(f'<i class="{"on" if h in on else ""}{" g" if h and h % 6 == 0 else ""}" '
+                    f'title="{h:02d}:00–{h:02d}:59 UTC"></i>' for h in range(24))
+    return f'<span class="strip">{cells}</span>'
 
 
 def layout(**overrides) -> dict:
-    """LAYOUT base + overrides; los dicts de ejes se fusionan en vez de reemplazarse."""
     out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in LAYOUT.items()}
     for k, v in overrides.items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
@@ -106,254 +232,910 @@ def layout(**overrides) -> dict:
             out[k] = v
     return out
 
-st.set_page_config(page_title="GitHub Events · Multimodelo", page_icon="📊", layout="wide")
-st.markdown(CSS, unsafe_allow_html=True)
-st.title("GitHub Events · Arquitectura multimodelo")
-st.caption("MongoDB (documentos) → Cassandra (series temporales) → Neo4j (grafo) · orquestado con Apache Airflow")
+
+def date_axis(d0: date, d1: date, max_ticks: int) -> dict:
+    span = (d1 - d0).days + 1
+    if span <= max_ticks:
+        ticks = [d0 + timedelta(days=i) for i in range(span)]
+    else:
+        step = 7 * math.ceil(span / 7 / max_ticks)
+        first = d0 + timedelta(days=(7 - d0.weekday()) % 7)
+        ticks = [first + timedelta(days=i) for i in range(0, (d1 - first).days + 1, step)]
+    return dict(type="date", tickmode="array", tickvals=[pd.Timestamp(d) for d in ticks],
+                ticktext=[f"{DIAS[d.weekday()]}<br>{d.day} {MESES[d.month - 1]}" for d in ticks],
+                range=[pd.Timestamp(d0) - pd.Timedelta(hours=14), pd.Timestamp(d1) + pd.Timedelta(hours=14)])
 
 
-# ------------------------------------------------------------------ datos (cache 5 min)
+def show(fig: go.Figure, height: int, key: str):
+    fig.update_layout(height=height)
+    st.plotly_chart(fig, theme=None, config=PLOTLY_CONFIG, key=key)
+
+
+# ------------------------------------------------------------------ bloques HTML
+def section(title: str, lead: str = ""):
+    st.html(f'<div class="sec"><div class="h">{title}</div>' + (f'<div class="p">{lead}</div>' if lead else "") + "</div>")
+
+
+def fig_head(num: str, title: str, sub: str = ""):
+    st.html(f'<div class="fig-t"><span class="n">{num}</span>{title}</div>' + (f'<div class="fig-s">{sub}</div>' if sub else ""))
+
+
+def fig_note(reading: str = "", source: str = ""):
+    parts = ([f"<b>Lectura.</b> {reading}"] if reading else []) + ([f'<span class="src"><b>Fuente.</b> {source}</span>'] if source else [])
+    st.html('<div class="fig-note">' + "<br>".join(parts) + "</div>")
+
+
+def stat(label: str, value: str, sub: str = "") -> str:
+    return f'<div class="stat"><div class="l">{label}</div><div class="v">{value}</div>' + (f'<div class="s">{sub}</div>' if sub else "") + "</div>"
+
+
+def table_html(df: pd.DataFrame, cols: list[tuple[str, str, str]], bar: str | None = None, sorted_col: str | None = None,
+               cls: str = "t") -> str:
+    numeric = ("int", "pct", "dec")
+    head = "".join(f'<th class="{"num" if k in numeric else ""}{" sorted" if c == sorted_col else ""}">{h}</th>'
+                   for c, h, k in cols)
+    vmax = float(df[bar].max()) if bar and len(df) else 0.0
+    body = []
+    for i, row in enumerate(df.to_dict("records"), 1):
+        tds = []
+        for c, _, kind in cols:
+            v = row.get(c)
+            missing = v is None or (isinstance(v, float) and math.isnan(v))
+            if kind == "rank":
+                tds.append(f'<td class="rk">{i}</td>')
+            elif kind in numeric:
+                txt = "—" if missing else (f"{v:,.0f}" if kind == "int" else f"{v:.1f} %" if kind == "pct" else f"{v:,.2f}")
+                if c == bar and vmax > 0 and not missing:
+                    txt = (f'<div class="cb"><div class="tr"><span style="width:{max(2.0, float(v) / vmax * 100):.1f}%"></span></div>'
+                           f"<span>{txt}</span></div>")
+                tds.append(f'<td class="num">{txt}</td>')
+            elif kind == "html":
+                tds.append(f"<td>{'' if missing else v}</td>")
+            elif kind == "name":
+                tds.append(f'<td class="nm">{"—" if missing else esc(v).replace("/", "/<wbr>")}</td>')
+            else:
+                tds.append(f'<td class="{"nw" if kind == "nw" else ""}">{"—" if missing else esc(v)}</td>')
+        body.append("<tr>" + "".join(tds) + "</tr>")
+    return f'<table class="{cls}"><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table>'
+
+
+def kpi_tile(kd: dict, value: str, ctx: str, value_cls: str = "") -> str:
+    tip = esc(f"{kd['definition']}\nFórmula: {kd['formula']}\nInterpretación: {kd['reading']}").replace("\n", "&#10;")
+    color = DB_COLOR[kd["db"]]
+    return (f'<div class="tile" style="--db:{color}" title="{tip}">'
+            f'<div class="tile-no">KPI {kd["no"]}</div><div class="tile-label">{kd["name"]}</div>'
+            f'<div class="tile-value {value_cls}">{value}</div><div class="tile-ctx">{ctx}</div>'
+            f'<div class="tile-src"><span><span class="sw" style="background:{color}"></span> {kd["db"]}</span>'
+            f'<code>{kd["table"]}</code></div></div>')
+
+
+def hbar(labels, values, colors, text, hover, customdata=None, height=None) -> go.Figure:
+    n = max(len(labels), 1)
+    height = height or 34 * n + 24
+    slot = (height - 24) / n
+    fig = go.Figure(go.Bar(x=values, y=labels, orientation="h", marker=dict(color=colors, cornerradius=4),
+                           text=text, textposition="outside", cliponaxis=False, textfont=dict(color=INK2, size=12),
+                           customdata=customdata, hovertemplate=hover))
+    room = 1 + max(0.3, 0.028 * max((len(str(t)) for t in text), default=0))
+    fig.update_layout(**layout(bargap=min(0.75, max(0.2, 1 - 22 / slot)), height=height,
+                               xaxis={"visible": False, "range": [0, float(max(values, default=0) or 1) * room]},
+                               yaxis={"showgrid": False, "autorange": "reversed", "ticks": "", "ticklabelstandoff": 6}))
+    return fig
+
+
+# ------------------------------------------------------------------ conexiones
+@st.cache_resource(show_spinner=False)
+def cass():
+    return config.cassandra_session()
+
+
+@st.cache_resource(show_spinner=False)
+def neo():
+    return config.neo4j_driver()
+
+
+@st.cache_resource(show_spinner=False)
+def mongo():
+    return config.mongo_db()
+
+
+def cypher(query: str, **params) -> list[dict]:
+    return [dict(r) for r in neo().execute_query(query, database_=config.NEO4J_DATABASE, **params).records]
+
+
+def native(v):
+    return v.to_native() if hasattr(v, "to_native") else v
+
+
+# ------------------------------------------------------------------ datos: Cassandra
 @st.cache_data(ttl=300, show_spinner=False)
-def available_dates() -> list[date]:
-    s = config.cassandra_session()
-    rows = s.execute("SELECT event_date FROM daily_totals")
-    return sorted({r.event_date.date() for r in rows}, reverse=True)
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def kpis_for(d: date) -> pd.DataFrame:
-    s = config.cassandra_session()
-    rows = s.execute("SELECT kpi_name, kpi_value, kpi_label, computed_at FROM kpis_by_date WHERE event_date=%s", (d,))
-    return pd.DataFrame([r._asdict() for r in rows])
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def events_by_hour(d: date) -> pd.DataFrame:
-    s = config.cassandra_session()
-    rows = s.execute("SELECT event_hour, event_type, event_count FROM events_by_hour WHERE event_date=%s", (d,))
-    return pd.DataFrame([r._asdict() for r in rows])
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def daily_totals(days: int = 14) -> pd.DataFrame:
-    s = config.cassandra_session()
-    year = date.today().year
-    rows = s.execute("SELECT event_date, total_events, unique_users, unique_repos FROM daily_totals WHERE year=%s LIMIT %s", (year, days))
-    df = pd.DataFrame([r._asdict() for r in rows])
-    if not df.empty:
-        df["event_date"] = pd.to_datetime(df["event_date"].astype(str))
-        df = df.sort_values("event_date")
+def hourly_all() -> pd.DataFrame:
+    df = pd.DataFrame(list(cass().execute("SELECT event_date, event_hour, event_type, event_count FROM events_by_hour")))
+    if df.empty:
+        return pd.DataFrame(columns=["event_date", "event_hour", "event_type", "event_count"])
+    df["event_date"] = df["event_date"].map(lambda d: d.date())
+    df["event_count"] = df["event_count"].fillna(0).astype("int64")
     return df
 
 
-REPO_COLS = ["pushes", "stars", "forks", "issues", "pull_requests", "total_events"]
-REPO_ES = {"repo_name": "repositorio", "pushes": "pushes", "stars": "estrellas", "forks": "forks", "issues": "issues",
-           "pull_requests": "pull requests", "total_events": "eventos", "usuarios": "usuarios distintos"}
-
-
 @st.cache_data(ttl=300, show_spinner=False)
-def repo_activity(dates: tuple[date, ...]) -> pd.DataFrame:
-    """Actividad por repo sumada sobre las fechas dadas (una partición de repo_activity_by_day por día)."""
-    s = config.cassandra_session()
-    frames = []
-    for d in dates:
-        rows = s.execute("SELECT repo_name, pushes, stars, forks, issues, pull_requests, total_events FROM repo_activity_by_day WHERE event_date=%s", (d,))
-        frames.append(pd.DataFrame([r._asdict() for r in rows]))
-    df = pd.concat([f for f in frames if not f.empty], ignore_index=True) if frames else pd.DataFrame()
+def daily() -> pd.DataFrame:
+    df = pd.DataFrame(list(cass().execute("SELECT event_date, total_events, unique_users, unique_repos FROM daily_totals")))
     if df.empty:
         return df
-    return df.fillna(0).groupby("repo_name", as_index=False)[REPO_COLS].sum()
+    df["event_date"] = df["event_date"].map(lambda d: d.date())
+    hours = hourly_all().groupby("event_date")["event_hour"].agg(lambda s: tuple(sorted(set(s))))
+    df["hours"] = df["event_date"].map(lambda d: hours.get(d, ()))
+    df["n_hours"] = df["hours"].map(len)
+    return df.fillna(0).sort_values("event_date").reset_index(drop=True)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def distinct_users_for(repos: tuple[str, ...]) -> dict:
-    """Usuarios distintos conectados a cada repo (grado del nodo en Neo4j)."""
-    with config.neo4j_driver() as drv:
-        recs = drv.execute_query(
-            "MATCH (u:User)-[]->(r:Repo) WHERE r.name IN $repos RETURN r.name AS repo, count(DISTINCT u) AS usuarios",
-            repos=list(repos), database_=config.NEO4J_DATABASE).records
-    return {rec["repo"]: rec["usuarios"] for rec in recs}
-
-
-def top_repos(dates: tuple[date, ...], n: int, order_by: str) -> pd.DataFrame:
-    df = repo_activity(dates)
+def kpis_all() -> pd.DataFrame:
+    df = pd.DataFrame(list(cass().execute("SELECT event_date, kpi_name, kpi_value, kpi_label, computed_at FROM kpis_by_date")))
     if df.empty:
-        return df
-    df = df.nlargest(n, order_by)
-    df["usuarios"] = df["repo_name"].map(distinct_users_for(tuple(df["repo_name"]))).fillna(0).astype(int)
-    df = df[["repo_name", "usuarios"] + [c for c in REPO_COLS if df[c].sum() > 0]]   # oculta columnas en cero (p. ej. pushes)
-    return df.rename(columns=REPO_ES).set_index("repositorio")
+        return pd.DataFrame(columns=["event_date", "kpi_name", "kpi_value", "kpi_label", "computed_at"])
+    df["event_date"] = df["event_date"].map(lambda d: d.date())
+    df["kpi_value"] = pd.to_numeric(df["kpi_value"], errors="coerce")
+    return df
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def graph_top_connected(n: int = 10) -> pd.DataFrame:
-    with config.neo4j_driver() as drv:
-        recs = drv.execute_query(
-            "MATCH (u:User)-[r]->(repo:Repo) "
-            "RETURN repo.name AS repo, count(DISTINCT u) AS usuarios, count(r) AS relaciones, "
-            "collect(DISTINCT type(r)) AS tipos ORDER BY usuarios DESC LIMIT $n",
-            n=n, database_=config.NEO4J_DATABASE).records
-    return pd.DataFrame([dict(r) for r in recs])
+def growth_all() -> dict:
+    by_day = {d: g.groupby("event_hour")["event_count"].sum() for d, g in hourly_all().groupby("event_date")}
+    out = {}
+    for d, cur in by_day.items():
+        prev = by_day.get(d - timedelta(days=1))
+        common = sorted(set(cur.index) & set(prev.index)) if prev is not None else []
+        base = float(prev.loc[common].sum()) if common else 0.0
+        out[d] = ((float(cur.loc[common].sum()) - base) / base * 100 if base else None, tuple(common))
+    return out
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def runs() -> pd.DataFrame:
+    df = pd.DataFrame(list(cass().execute(
+        "SELECT run_date, run_hour, raw_count, clean_count, loaded_mongo, loaded_neo4j FROM pipeline_runs")))
+    if not df.empty:
+        df["run_date"] = df["run_date"].map(lambda d: d.date())
+    return df
+
+
+REPO_COLS = ["total_events", "pull_requests", "issues", "stars", "forks", "pushes"]
+REPO_ES = {"total_events": "Eventos", "pull_requests": "Pull requests", "issues": "Issues", "stars": "Estrellas",
+           "forks": "Forks", "pushes": "Pushes"}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def repo_rank(dates: tuple[date, ...], k: int = 50) -> pd.DataFrame:
+    frames = [pd.DataFrame(list(cass().execute(
+        "SELECT repo_name, pushes, stars, forks, issues, pull_requests, total_events FROM repo_activity_by_day "
+        "WHERE event_date=%s", (d,)))) for d in dates]
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame(columns=["repo_name", *REPO_COLS])
+    df = pd.concat(frames, ignore_index=True)
+    df[REPO_COLS] = df[REPO_COLS].fillna(0).astype("int64")
+    if len(frames) > 1:
+        df = df.groupby("repo_name", as_index=False)[REPO_COLS].sum()
+    # solo el top-k de cada métrica: rankings exactos para N <= k sin cachear particiones completas
+    keep = set().union(*(df.nlargest(k, c)["repo_name"] for c in REPO_COLS))
+    return df[df["repo_name"].isin(keep)].reset_index(drop=True)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def user_activity(d: date) -> dict:
+    df = pd.DataFrame(list(cass().execute(
+        "SELECT actor_login, event_count FROM user_activity_by_day WHERE event_date=%s", (d,))))
+    if df.empty:
+        return {}
+    df["event_count"] = df["event_count"].fillna(0).astype("int64")
+    total = int(df["event_count"].sum())
+    bots = df["actor_login"].str.endswith("[bot]")
+    k = max(1, round(len(df) * 0.01))
+    top = df.nlargest(10, "event_count").assign(share=lambda t: t["event_count"] / total * 100)
+    return {"users": len(df), "total": total, "bot_users": int(bots.sum()), "bot_events": int(df.loc[bots, "event_count"].sum()),
+            "top1_k": k, "top1_events": int(df["event_count"].nlargest(k).sum()), "median": float(df["event_count"].median()),
+            "top": top.to_dict("records")}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def degree_of(repos: tuple[str, ...]) -> dict:
+    recs = cypher("MATCH (u:User)-[]->(r:Repo) WHERE r.name IN $repos RETURN r.name AS repo, count(DISTINCT u) AS deg",
+                  repos=list(repos))
+    return {r["repo"]: r["deg"] for r in recs}
+
+
+# ------------------------------------------------------------------ datos: Neo4j
 @st.cache_data(ttl=300, show_spinner=False)
 def graph_stats() -> dict:
-    with config.neo4j_driver() as drv:
-        r = drv.execute_query(
-            "MATCH (u:User) WITH count(u) AS users MATCH (r:Repo) WITH users, count(r) AS repos "
-            "MATCH ()-[rel]->() RETURN users, repos, count(rel) AS rels", database_=config.NEO4J_DATABASE).records
-    return dict(r[0]) if r else {"users": 0, "repos": 0, "rels": 0}
+    q = " UNION ALL ".join(f"MATCH (n:{label}) RETURN '{key}' AS k, count(n) AS n"
+                           for key, label in (("users", "User"), ("repos", "Repo"), ("orgs", "Org")))
+    nodes = {r["k"]: r["n"] for r in cypher(q)}
+    q = " UNION ALL ".join(f"MATCH ()-[r:{t}]->() RETURN '{t}' AS t, count(r) AS n" for t in [*REL_ES, "BELONGS_TO"])
+    return {**nodes, "rels": {r["t"]: r["n"] for r in cypher(q)}}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def graph_neighbors(repo: str, n: int = 25) -> pd.DataFrame:
-    with config.neo4j_driver() as drv:
-        recs = drv.execute_query(
-            "MATCH (u:User)-[r]->(repo:Repo {name:$repo}) RETURN u.login AS usuario, type(r) AS relacion, r.count AS veces "
-            "ORDER BY veces DESC LIMIT $n", repo=repo, n=n, database_=config.NEO4J_DATABASE).records
-    return pd.DataFrame([dict(r) for r in recs])
+def graph_top(n: int) -> pd.DataFrame:
+    return pd.DataFrame(cypher(
+        "MATCH (u:User)-[r]->(repo:Repo) "
+        "RETURN repo.name AS repo, count(DISTINCT u) AS usuarios, sum(r.count) AS interacciones "
+        "ORDER BY usuarios DESC, interacciones DESC LIMIT $n", n=n))
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def mongo_overview() -> tuple[int, pd.DataFrame, pd.DataFrame]:
-    db = config.mongo_db()
-    total = db.events.estimated_document_count()
-    by_type = list(db.events.aggregate([{"$group": {"_id": "$type", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}]))
-    recent = list(db.events.find({}, {"type": 1, "actor.login": 1, "repo.name": 1, "created_at": 1}).sort("created_at", -1).limit(15))
-    df_recent = pd.DataFrame([{"id": r["_id"], "tipo": r["type"], "usuario": r["actor"]["login"], "repo": r["repo"]["name"], "fecha": r["created_at"]} for r in recent])
-    return total, pd.DataFrame(by_type).rename(columns={"_id": "tipo"}), df_recent
+def ego(repo: str, n: int = 36) -> dict:
+    info = cypher("MATCH (u:User)-[r]->(repo:Repo {name:$repo}) "
+                  "WITH repo, count(DISTINCT u) AS deg, sum(r.count) AS inter, "
+                  "     count(DISTINCT CASE WHEN u.login ENDS WITH '[bot]' THEN u END) AS bots "
+                  "OPTIONAL MATCH (repo)-[:BELONGS_TO]->(o:Org) RETURN deg, inter, bots, o.login AS org", repo=repo)
+    users = cypher("MATCH (u:User)-[r]->(:Repo {name:$repo}) "
+                   "WITH u, collect({tipo: type(r), veces: r.count, desde: r.first_seen, hasta: r.last_seen}) AS rels, "
+                   "     sum(r.count) AS total "
+                   "RETURN u.login AS usuario, total, rels ORDER BY total DESC, usuario LIMIT $n", repo=repo, n=n)
+    for u in users:
+        u["rels"] = [{**r, "desde": native(r["desde"]), "hasta": native(r["hasta"])} for r in u["rels"]]
+    return {**(info[0] if info else {"deg": 0, "inter": 0, "bots": 0, "org": None}), "users": users}
 
 
-# ------------------------------------------------------------------ filtros (una fila)
+# ------------------------------------------------------------------ datos: MongoDB
+@st.cache_data(ttl=300, show_spinner=False)
+def mongo_overview() -> dict:
+    ev = mongo().events
+    first = ev.find_one({}, {"created_at": 1}, sort=[("created_at", 1)])
+    last = ev.find_one({}, {"created_at": 1}, sort=[("created_at", -1)])
+    return {"total": ev.estimated_document_count(), "first": first and first["created_at"], "last": last and last["created_at"]}
+
+
+def _iso(doc):
+    if isinstance(doc, dict):
+        return {k: _iso(v) for k, v in doc.items()}
+    if isinstance(doc, list):
+        return [_iso(v) for v in doc]
+    return doc.isoformat() if isinstance(doc, datetime) else doc
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def mongo_day(d: date) -> dict:
+    start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    rng = {"$gte": start, "$lt": start + timedelta(days=1)}
+    ev = mongo().events
+    actions = {(r["_id"] or "unknown"): r["n"] for r in ev.aggregate([
+        {"$match": {"type": "PullRequestEvent", "created_at": rng}},
+        {"$group": {"_id": "$payload.action", "n": {"$sum": 1}}}])}
+    latest = list(ev.find({"created_at": rng}, {"type": 1, "actor.login": 1, "repo.name": 1, "created_at": 1, "payload.action": 1})
+                  .sort("created_at", -1).limit(10))
+    sample = ev.find_one({"created_at": rng}, sort=[("created_at", -1)])
+    return {"count": ev.count_documents({"created_at": rng}), "actions": actions, "sample": _iso(sample),
+            "latest": [{"hora": r["created_at"].strftime("%H:%M:%S"), "tipo": EVENT_ES.get(r["type"], r["type"]),
+                        "tecnico": r["type"], "usuario": r["actor"]["login"], "repo": r["repo"]["name"],
+                        "accion": (r.get("payload") or {}).get("action") or "—"} for r in latest]}
+
+
+# ------------------------------------------------------------------ gráficos
+def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, dict]:
+    totals = day.groupby("event_type")["event_count"].sum().sort_values(ascending=False)
+    main = sorted([t for t in totals.index if t in TYPE_COLOR][:5], key=TYPE_ORDER.index)
+    serie = day["event_type"].where(day["event_type"].isin(main), "Otros")
+    pv = day.assign(serie=serie).pivot_table(index="event_hour", columns="serie", values="event_count", aggfunc="sum").reindex(range(24))
+    cats = [f"{h:02d}:00" for h in range(24)]
+    fig = go.Figure()
+    for t in main + (["Otros"] if "Otros" in pv.columns else []):
+        name = EVENT_ES.get(t, t) if t != "Otros" else "Otros tipos"
+        fig.add_bar(x=cats, y=[None if pd.isna(v) else v for v in pv[t]], name=name,
+                    marker=dict(color=TYPE_COLOR.get(t, OTHER), line=dict(color="#ffffff", width=1)),
+                    hovertemplate=f"{name}: %{{y:,.0f}}<extra></extra>")
+    tot = pv.sum(axis=1, min_count=1)
+    fig.add_scatter(x=cats, y=[None if pd.isna(v) else v for v in tot], mode="markers", marker=dict(opacity=0, size=1),
+                    name="Total", hovertemplate="<b>Total: %{y:,.0f}</b><extra></extra>", showlegend=False)
+    info = {"main": main, "totals": totals}
+    present = tot.dropna()
+    if not present.empty:
+        peak, low = int(present.idxmax()), int(present.idxmin())
+        info.update(peak=peak, peak_v=int(present[peak]), low=low, low_v=int(present[low]))
+        fig.add_annotation(x=cats[peak], y=present[peak], text=f"Pico {int(present[peak]):,}", showarrow=False, yshift=12,
+                           font=dict(size=11, color=INK))
+        if len(present) >= 6:
+            atyp = present[present < 0.25 * present.median()]
+            info["atypical"] = list(atyp.index)
+            if len(atyp):
+                fig.add_scatter(x=[cats[h] for h in atyp.index], y=[float(present.max()) * 0.06 + v for v in atyp], mode="markers",
+                                marker=dict(symbol="triangle-down", size=9, color=INK2), name="Volumen atípico (< 25 % de la mediana)",
+                                hovertemplate="Volumen atípico: %{customdata:,.0f} eventos<extra></extra>", customdata=list(atyp))
+    for a, b in runs_of(set(range(24)) - set(hours)):
+        fig.add_vrect(x0=a - 0.5, x1=b + 0.5, fillcolor="#f2f3f5", line_width=0, layer="below")
+        if b - a >= 1:
+            fig.add_annotation(x=(a + b) / 2, y=0.5, yref="paper", text="Sin datos<br>cargados", showarrow=False,
+                               font=dict(size=11, color=MUTED))
+    fig.update_layout(**layout(barmode="stack", bargap=0.3, barcornerradius=3, showlegend=True, hovermode="x unified",
+                               legend={"traceorder": "normal"},
+                               xaxis={"type": "category", "categoryorder": "array", "categoryarray": cats,
+                                      "tickvals": cats[::3], "ticktext": [f"{h:02d} h" for h in range(0, 24, 3)],
+                                      "title": {"text": "Hora del día (UTC)"}},
+                               yaxis={"tickformat": "~s", "title": {"text": "Eventos por hora"}}))
+    return fig, info
+
+
+def fig_composition(totals: pd.Series, main: list[str]) -> go.Figure:
+    total = float(totals.sum())
+    rows = [(t, int(totals[t])) for t in totals.index if t in main]
+    others = totals[[t for t in totals.index if t not in main]]
+    if len(others):
+        rows.append(("Otros", int(others.sum())))
+    labels = [EVENT_ES.get(t, t) if t != "Otros" else "Otros tipos" for t, _ in rows]
+    vals = [v for _, v in rows]
+    detail = [t if t != "Otros" else " · ".join(f"{EVENT_ES.get(o, o)} {n:,}" for o, n in others.head(4).items()) for t, _ in rows]
+    return hbar(labels, vals, [TYPE_COLOR.get(t, OTHER) for t, _ in rows],
+                [f"{v / total * 100:.1f} %  ·  {fnum(v)}" for v in vals],
+                "<b>%{y}</b><br>%{x:,} eventos<br><span style='color:#6b6f78'>%{customdata}</span><extra></extra>",
+                customdata=detail, height=420)
+
+
+def fig_daily(dd: pd.DataFrame, sel: date) -> go.Figure:
+    d0, d1 = dd["event_date"].min(), dd["event_date"].max()
+    fig = go.Figure()
+    for a, b in runs_of([i for i in range((d1 - d0).days + 1) if (d0 + timedelta(days=i)).weekday() >= 5]):
+        fig.add_vrect(x0=pd.Timestamp(d0 + timedelta(days=a)) - pd.Timedelta(hours=12),
+                      x1=pd.Timestamp(d0 + timedelta(days=b)) + pd.Timedelta(hours=12), fillcolor="#f1f2f4", line_width=0, layer="below")
+    full = dd["n_hours"] >= 24
+    hover = ("<b>%{customdata[0]}</b><br>%{y:,} eventos<br>%{customdata[1]} de 24 h cargadas · %{customdata[2]:,.0f} eventos/h"
+             "<br>%{customdata[3]:,} usuarios activos · %{customdata[4]:,} repositorios<extra></extra>")
+    for mask, name, color in ((full, "Día completo (24 h)", ACCENT), (~full, "Día parcial (< 24 h; se indica cuántas)", ACCENT_SOFT)):
+        part = dd[mask]
+        if part.empty:
+            continue
+        fig.add_bar(x=pd.to_datetime(part["event_date"]), y=part["total_events"], name=name, marker=dict(color=color, cornerradius=3),
+                    customdata=[[fdate(d, weekday=True), n, t / n if n else 0, u, r] for d, n, t, u, r in
+                                zip(part["event_date"], part["n_hours"], part["total_events"], part["unique_users"], part["unique_repos"])],
+                    hovertemplate=hover, text=[f"{n} h" if n < 24 else "" for n in part["n_hours"]], textposition="outside",
+                    textfont=dict(size=11, color=MUTED), cliponaxis=False)
+    srow = dd[dd["event_date"] == sel]
+    if not srow.empty:
+        pos = (sel - d0).days / max(1, (d1 - d0).days)
+        fig.add_annotation(x=pd.Timestamp(sel), y=float(srow["total_events"].iloc[0]), text="Seleccionado", showarrow=True,
+                           arrowhead=0, arrowwidth=1, arrowcolor=INK2, ax=0, ay=-40, standoff=18 if srow["n_hours"].iloc[0] < 24 else 2,
+                           xanchor="right" if pos > 0.9 else "left" if pos < 0.1 else "center", font=dict(size=11, color=INK),
+                           bgcolor="rgba(255,255,255,0.9)")
+    fig.update_layout(**layout(barmode="overlay", bargap=0.25, showlegend=True, hovermode="closest",
+                               xaxis=date_axis(d0, d1, 16), yaxis={"tickformat": "~s", "title": {"text": "Eventos por día"}}))
+    return fig
+
+
+def fig_trend(dd: pd.DataFrame, values: dict, sel: date, ytitle: str, hover_fmt: str, suffix: str = "") -> go.Figure:
+    d0, d1 = dd["event_date"].min(), dd["event_date"].max()
+    days = [d0 + timedelta(days=i) for i in range((d1 - d0).days + 1)]
+    partial = dict(zip(dd["event_date"], dd["n_hours"] < 24))
+    fig = go.Figure()
+    fig.add_scatter(x=[pd.Timestamp(d) for d in days], y=[values.get(d) for d in days], mode="lines", connectgaps=False,
+                    line=dict(color=ACCENT, width=2), hoverinfo="skip")
+    for is_partial, fill in ((False, ACCENT), (True, "#ffffff")):
+        pts = [d for d in days if values.get(d) is not None and partial.get(d, False) == is_partial]
+        if pts:
+            fig.add_scatter(x=[pd.Timestamp(d) for d in pts], y=[values[d] for d in pts], mode="markers",
+                            marker=dict(size=8, color=fill, line=dict(color=ACCENT if is_partial else "#ffffff", width=2)),
+                            customdata=[fdate(d, weekday=True) + (" (parcial)" if is_partial else "") for d in pts],
+                            hovertemplate=f"<b>%{{customdata}}</b><br>%{{y:{hover_fmt}}}{suffix}<extra></extra>")
+    fig.add_vline(x=pd.Timestamp(sel), line_width=1, line_color="#9a9ea8")
+    fig.update_layout(**layout(xaxis=date_axis(d0, d1, 6), yaxis={"title": {"text": ytitle}, "ticksuffix": suffix}))
+    return fig
+
+
+def fig_growth(dd: pd.DataFrame, growth: dict, sel: date) -> go.Figure:
+    d0, d1 = dd["event_date"].min(), dd["event_date"].max()
+    pts = [(d, *growth[d]) for d in dd["event_date"] if growth.get(d, (None,))[0] is not None]
+    fig = go.Figure(go.Bar(x=[pd.Timestamp(d) for d, _, _ in pts], y=[g for _, g, _ in pts],
+                           marker=dict(color=[POS if g >= 0 else NEG for _, g, _ in pts], cornerradius=3),
+                           customdata=[[fdate(d, weekday=True), len(h)] for d, _, h in pts],
+                           hovertemplate="<b>%{customdata[0]}</b><br>%{y:+.1f} % vs. día anterior<br>%{customdata[1]} h comparadas<extra></extra>"))
+    fig.add_vline(x=pd.Timestamp(sel), line_width=1, line_color="#9a9ea8")
+    fig.update_layout(**layout(bargap=0.3, xaxis=date_axis(d0, d1, 6),
+                               yaxis={"title": {"text": "Variación (%)"}, "ticksuffix": " %", "zeroline": True,
+                                      "zerolinecolor": "#9a9ea8", "zerolinewidth": 1}))
+    return fig
+
+
+def fig_ego(repo: str, eg: dict) -> go.Figure:
+    users = eg["users"]
+    order = list(REL_ES)
+    for u in users:
+        u["main"] = max(u["rels"], key=lambda r: r["veces"] or 0)["tipo"]
+    users.sort(key=lambda u: (order.index(u["main"]) if u["main"] in order else len(order), -(u["total"] or 0)))
+    n, top = len(users), max((u["total"] or 1) for u in users)
+    for i, u in enumerate(users):
+        ang = math.pi / 2 - 2 * math.pi * i / n
+        r = 1.0 if n <= 24 or i % 2 == 0 else 0.84
+        u["x"], u["y"] = r * math.cos(ang), r * math.sin(ang)
+    fig = go.Figure()
+    ex, ey = [], []
+    for u in users:
+        ex += [0, u["x"], None]
+        ey += [0, u["y"], None]
+    fig.add_scatter(x=ex, y=ey, mode="lines", line=dict(color="#d9dbe0", width=1), hoverinfo="skip", showlegend=False)
+    for t in order:
+        grp = [u for u in users if u["main"] == t]
+        if not grp:
+            continue
+        # leyenda aparte: Plotly usaría el símbolo del primer punto (rombo si es bot)
+        fig.add_scatter(x=[None], y=[None], mode="markers", name=REL_ES[t], marker=dict(size=10, color=REL_COLOR[t]))
+        fig.add_scatter(
+            x=[u["x"] for u in grp], y=[u["y"] for u in grp], mode="markers", name=REL_ES[t], showlegend=False,
+            marker=dict(size=[9 + 13 * math.sqrt((u["total"] or 0) / top) for u in grp], color=REL_COLOR[t],
+                        symbol=["diamond" if u["usuario"].endswith("[bot]") else "circle" for u in grp],
+                        line=dict(color="#ffffff", width=1.5)),
+            customdata=[[u["usuario"], " · ".join(f"{REL_ES.get(r['tipo'], r['tipo'])} ×{r['veces']:,}" for r in u["rels"])]
+                        for u in grp],
+            hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>")
+    lab = sorted(users, key=lambda u: -(u["total"] or 0))[:10]
+    fig.add_scatter(x=[u["x"] * 1.1 for u in lab], y=[u["y"] * 1.1 for u in lab], mode="text", text=[u["usuario"] for u in lab],
+                    textposition=["middle right" if u["x"] >= 0 else "middle left" for u in lab],
+                    textfont=dict(size=11, color=INK2), hoverinfo="skip", showlegend=False)
+    fig.add_scatter(x=[None], y=[None], mode="markers", name="Cuenta automatizada ([bot])",
+                    marker=dict(symbol="diamond", size=10, color="#9a9ea8"))
+    fig.add_scatter(x=[0], y=[0], mode="markers+text", text=[f"<b>{repo}</b>"], textposition="bottom center", textfont=dict(size=12, color=INK),
+                    marker=dict(size=28, color=DB_COLOR["Neo4j"], line=dict(color="#ffffff", width=2)), showlegend=False,
+                    hovertemplate=f"<b>{repo}</b><br>{eg['deg']:,} usuarios distintos<extra></extra>")
+    fig.update_layout(**layout(showlegend=True, hovermode="closest", margin=dict(l=4, r=4, t=8, b=4),
+                               xaxis={"visible": False, "range": [-1.75, 1.75]},
+                               yaxis={"visible": False, "range": [-1.3, 1.3], "scaleanchor": "x", "scaleratio": 1}))
+    return fig
+
+
+# ================================================================== página
+st.set_page_config(page_title="GitHub Events · Dashboard analítico", page_icon=":material/monitoring:", layout="wide")
+st.markdown(CSS, unsafe_allow_html=True)
+
 try:
-    dates = available_dates()
+    dd = daily()
 except Exception as exc:
     st.error(f"No se pudo conectar a Cassandra: {exc}")
     st.stop()
-if not dates:
+if dd.empty:
     st.info("Aún no hay datos. Ejecuta el DAG `github_events_pipeline` en Airflow o `python src/run_pipeline_local.py`.")
     st.stop()
 
-f1, f2, _ = st.columns([2, 2, 6])
-sel_date = f1.selectbox("Día", dates, format_func=lambda d: d.strftime("%d %b %Y"))
-top_n = f2.slider("Top N repositorios", 5, 20, 10)
+hourly, kp, growth = hourly_all(), kpis_all(), growth_all()
+cov = dict(zip(dd["event_date"], dd["hours"]))
+dates = list(dd["event_date"])[::-1]
+first_d, last_d = dd["event_date"].iloc[0], dd["event_date"].iloc[-1]
+today_utc = datetime.now(timezone.utc).date()
+n_full = int((dd["n_hours"] >= 24).sum())
 
-# ------------------------------------------------------------------ KPIs (stat tiles)
-k = kpis_for(sel_date)
-kv = {r.kpi_name: r for r in k.itertuples()} if not k.empty else {}
+# ------------------------------------------------------------------ encabezado
+st.html(
+    '<div class="hdr"><div class="overline">UTEC · Big Data · Proyecto Grupal II</div>'
+    '<div class="title" role="heading" aria-level="1">Actividad pública en GitHub: dashboard analítico</div>'
+    '<p class="lede">Eventos de GH Archive procesados cada hora por un DAG de Apache Airflow y almacenados en una arquitectura '
+    "multimodelo: MongoDB conserva el documento original, Cassandra los agregados temporales y Neo4j el grafo de colaboración.</p>"
+    f'<div class="meta"><span><b>Periodo cargado</b>{fdate(first_d)} – {fdate(last_d)}</span>'
+    f"<span><b>Días</b>{len(dd)} ({n_full} completos, {len(dd) - n_full} parciales)</span>"
+    f"<span><b>Último dato</b>{fdate(last_d)}, {max(cov[last_d]):02d}:59 UTC</span>"
+    "<span><b>Actualización</b>cada hora (Airflow)</span><span><b>Zona horaria</b>UTC (Lima = UTC−5)</span></div></div>")
 
-def _v(kpi):
-    r = kv.get(kpi)
-    return r.kpi_value if r is not None else None
+# ------------------------------------------------------------------ filtros
+f1, f2, _ = st.columns([2.3, 2, 5])
+if st.session_state.get("fecha") not in cov:
+    try:
+        st.session_state["fecha"] = date.fromisoformat(st.query_params.get("fecha", ""))
+    except ValueError:
+        pass
+    if st.session_state.get("fecha") not in cov:
+        st.session_state["fecha"] = dates[0]
+sel = f1.selectbox("Fecha de análisis (UTC)", dates, key="fecha",
+                   format_func=lambda d: fdate(d, weekday=True) + ("" if len(cov[d]) == 24 else f" — parcial ({len(cov[d])} h)"))
+st.query_params["fecha"] = str(sel)
+top_n = f2.slider("Elementos en rankings", 5, 20, 10)
+hrs = cov[sel]
+if len(hrs) < 24:
+    kind = "Día en curso" if sel == today_utc else "Día parcial"
+    why = ("Airflow agrega una hora nueva cada 60 minutos." if sel == today_utc
+           else "La carga histórica de este día está incompleta.")
+    st.html(f'<div class="callout"><span class="badge warn">{kind}</span><span>Hay <b>{len(hrs)} de 24 horas</b> con datos '
+            f"({hours_label(hrs)} UTC).</span>{hour_strip(hrs)}<span>{why} Los totales del día no son comparables con días "
+            "completos; el crecimiento diario compara solo las horas presentes en ambos días.</span></div>")
+
+# ------------------------------------------------------------------ KPIs
+krow = kp[kp["event_date"] == sel].set_index("kpi_name")
 
 
-def _lbl(kpi):
-    r = kv.get(kpi)
-    return r.kpi_label if r is not None else ""
+def kval(name: str) -> float | None:
+    v = krow["kpi_value"].get(name) if name in krow.index else None
+    return None if v is None or pd.isna(v) else float(v)
 
 
-c = st.columns(5)
-v = _v("events_per_day")
-card(c[0], "Eventos del día", f"{v:,.0f}" if v is not None else "—", "registros procesados por el pipeline", "Cassandra", "events_by_hour")
-v = _v("daily_growth_pct")
-if v is None:
-    gv = "—"
+def klabel(name: str) -> str:
+    return str(krow["kpi_label"].get(name, "")) if name in krow.index else ""
+
+
+section(f"Indicadores clave · {fdate(sel, weekday=True)}",
+        "Calculados automáticamente por la etapa 6 del DAG y guardados en Cassandra (<code>kpis_by_date</code>). "
+        "El color superior de cada tarjeta indica la base de datos de origen; al pasar el cursor se muestra su definición y fórmula.")
+K = {kd["key"]: kd for kd in KPI_DEF}
+day_row = dd.set_index("event_date").loc[sel]
+tiles = []
+
+ev = kval("events_per_day")
+badge = '<span class="badge ok">Día completo</span>' if len(hrs) == 24 else f'<span class="badge warn">Parcial · {len(hrs)}/24 h</span>'
+tiles.append(kpi_tile(K["events_per_day"], "—" if ev is None else f"{ev:,.0f}",
+                      badge + (f"<br>≈ {ev / len(hrs):,.0f} eventos por hora cargada." if ev and hrs else "")))
+
+g_live, common = growth.get(sel, (None, ()))
+g_stored, prev = kval("daily_growth_pct"), sel - timedelta(days=1)
+if g_live is None:
+    tiles.append(kpi_tile(K["daily_growth_pct"], '<span class="na">N/D</span>',
+                          f"Sin datos del {fdate(prev, weekday=True)} para comparar."))
 else:
-    gv = f'<span style="color:{"#008300" if v >= 0 else "#c0392b"}">{v:+.1f} %</span>'
-card(c[1], "Crecimiento diario", gv, _lbl("daily_growth_pct") or "vs. día anterior, mismas horas", "Cassandra", "events_by_hour")
-v = _v("avg_events_per_user")
-card(c[2], "Eventos por usuario", f"{v:.2f}" if v is not None else "—", _lbl("avg_events_per_user") or "promedio del día", "Cassandra", "daily_totals")
-v = _v("pr_merge_rate_pct")
-card(c[3], "PRs aceptados", f"{v:.1f} %" if v is not None else "—", _lbl("pr_merge_rate_pct") or "merged / (merged + cerrados)", "MongoDB", "events.payload.action")
-r = kv.get("top_repo_connections")
-_name = r.kpi_label if r is not None else "—"
-card(c[4], "Repo más conectado", _name, f"<b>{r.kpi_value:,.0f} usuarios distintos</b> (grado del nodo)" if r is not None else "", "Neo4j", "(User)-[]->(Repo)")
-if kv:
-    st.caption(f"KPIs calculados por Airflow a las {list(kv.values())[0].computed_at:%H:%M} UTC · fuente: Cassandra `kpis_by_date`")
+    arrow, cls = ("▲", "up") if g_live >= 0 else ("▼", "down")
+    ctx = f'vs. {fdate(prev, weekday=True, year=False)}, mismas {len(common)} h <span class="nw">({hours_label(common)})</span>.'
+    if g_stored is None or abs(g_stored - g_live) > 0.05:
+        ctx += (' <span class="badge" title="El valor guardado en kpis_by_date se calculó antes de completarse la carga del '
+                'día anterior; se muestra el recalculado con los datos actuales (scripts/recompute_kpis.py lo actualiza).">recalculado</span>')
+    signed = f"{g_live:+.1f}".replace("-", "−")
+    tiles.append(kpi_tile(K["daily_growth_pct"], f'<span class="{cls}"><span class="arr">{arrow}</span>{signed}<span class="u">%</span></span>', ctx))
+
+v3 = kval("avg_events_per_user")
+users_n = int(day_row["unique_users"])
+tiles.append(kpi_tile(K["avg_events_per_user"], "—" if v3 is None else f"{v3:.2f}",
+                      f"{(ev or 0):,.0f} eventos ÷ {users_n:,} usuarios activos (actores distintos)."))
+
+v4 = kval("pr_merge_rate_pct")
+m = re.search(r"(\d+) merged / (\d+) cerrados", klabel("pr_merge_rate_pct"))
+ctx4 = (f"{int(m.group(1)):,} fusionados de {int(m.group(1)) + int(m.group(2)):,} PR cerrados en el día "
+        f"({int(m.group(2)):,} sin fusionar)." if m else "Fusionados / (fusionados + cerrados sin fusionar).")
+tiles.append(kpi_tile(K["pr_merge_rate_pct"], "—" if v4 is None else f"{v4:.1f}<span class='u'>%</span>", ctx4))
+
+r5, d5 = klabel("top_repo_connections"), kval("top_repo_connections")
+if r5 and d5 is not None:
+    c5 = krow["computed_at"].get("top_repo_connections")
+    ctx5 = f"{d5:,.0f} usuarios distintos conectados en el grafo acumulado al {fdate(c5.date(), year=False)}, {c5:%H:%M} UTC."
+    try:
+        live = degree_of((r5,)).get(r5)
+        if live and live != int(d5):
+            ctx5 += f" Hoy en el grafo: {live:,}."
+    except Exception:
+        pass
+    tiles.append(kpi_tile(K["top_repo_connections"], esc(r5).replace("/", "/<wbr>"), ctx5, "name long" if len(r5) > 22 else "name"))
+else:
+    tiles.append(kpi_tile(K["top_repo_connections"], '<span class="na">—</span>', "KPI aún no calculado para esta fecha."))
+st.html('<div class="tiles">' + "".join(tiles) + "</div>")
+foot = "".join(f'<span><span class="sw" style="background:{c}"></span>{db}</span>' for db, c in DB_COLOR.items())
+if not krow.empty:
+    foot += f"<span>Último cálculo de los KPI de esta fecha: {fdt(krow['computed_at'].max())}</span>"
+st.html(f'<div class="tiles-foot">{foot}</div>')
 
 # ------------------------------------------------------------------ pestañas por base de datos
-tab_c, tab_g, tab_m, tab_doc = st.tabs(["⏱ Cassandra · series temporales", "🕸 Neo4j · grafo", "📄 MongoDB · documentos", "ℹ️ KPIs y arquitectura"])
+tab_c, tab_g, tab_m, tab_doc = st.tabs(["Actividad temporal · Cassandra", "Red de colaboración · Neo4j",
+                                        "Documentos fuente · MongoDB", "Metodología y calidad de datos"])
 
 with tab_c:
-    left, right = st.columns([3, 2])
-    ebh = events_by_hour(sel_date)
-    if not ebh.empty:
-        main_types = ["PullRequestEvent", "IssuesEvent", "IssueCommentEvent", "PullRequestReviewEvent", "WatchEvent", "ReleaseEvent", "ForkEvent", "PushEvent"]
-        ebh["serie"] = ebh["event_type"].where(ebh["event_type"].isin(main_types), "Other")
-        pivot = ebh.groupby(["event_hour", "serie"], as_index=False)["event_count"].sum()
-        order = [t for t in main_types if t in set(pivot["serie"])] + (["Other"] if "Other" in set(pivot["serie"]) else [])
-        fig = px.area(pivot, x="event_hour", y="event_count", color="serie", category_orders={"serie": order},
-                      color_discrete_sequence=SERIES, title="Eventos por hora y tipo")
-        fig.update_traces(line=dict(width=1.5), hovertemplate="%{y:,} eventos<extra>%{fullData.name}</extra>")
-        fig.update_layout(**layout(hovermode="x unified", xaxis={"title": "Hora (UTC)"}, yaxis={"title": None}, legend_title_text=""))
-        left.plotly_chart(fig, width="stretch")
+    st.html('<p class="tab-lead">Agregados que Cassandra sirve leyendo <b>una sola partición por consulta</b> (diseño orientado a '
+            "consultas, sin JOIN): <code>events_by_hour</code> y <code>repo_activity_by_day</code> particionadas por día, "
+            "<code>daily_totals</code> por año y <code>user_activity_by_day</code> por día.</p>")
+    day = hourly[hourly["event_date"] == sel]
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        fig_head("Gráfico 1", "Eventos por hora y tipo de evento", f"{fdate(sel, weekday=True)} · horas en UTC · los 5 tipos principales del día")
+        fig, info = fig_hourly(day, hrs)
+        show(fig, 420, "g1")
+        reading = (f"Hora pico: {info['peak']:02d} h ({info['peak_v']:,} eventos); hora valle: {info['low']:02d} h "
+                   f"({info['low_v']:,}). {len(hrs)} de 24 horas con datos." if "peak" in info else "Sin datos para el día.")
+        if info.get("atypical"):
+            reading += (f" Las horas marcadas con ▼ ({', '.join(f'{h:02d} h' for h in info['atypical'])}) tienen menos del 25 % "
+                        "del volumen mediano del día: suele indicar una captura incompleta del feed de GH Archive, no una caída real.")
+        fig_note(reading, "Cassandra · <code>events_by_hour</code> (partición <code>event_date</code>).")
+    with right:
+        fig_head("Gráfico 2", "Composición del día por tipo de evento", "porcentaje del total y número de eventos")
+        totals = info["totals"]
+        show(fig_composition(totals, info["main"]), 420, "g2")
+        if len(totals):
+            tshare = totals.iloc[0] / totals.sum() * 100
+            reading = (f"{EVENT_ES.get(totals.index[0], totals.index[0])} concentra el {tshare:.1f} % de los "
+                       f"{int(totals.sum()):,} eventos; hay {len(totals)} tipos distintos en el día.")
+            if "PushEvent" not in totals.index:
+                reading += " El feed de este día no trae eventos Push (intermitentes en GH Archive 2026)."
+            fig_note(reading, "Cassandra · <code>events_by_hour</code>. Colores fijos por tipo, iguales en ambos gráficos.")
 
-        share = ebh.groupby("serie", as_index=False)["event_count"].sum().sort_values("event_count")
-        fig2 = hbar(share["event_count"], share["serie"], SERIES[0], "Distribución por tipo de evento",
-                    text=share["event_count"].map("{:,}".format))
-        right.plotly_chart(fig2, width="stretch")
+    section("Evolución diaria", "Todas las fechas cargadas. Las barras claras son días parciales y llevan encima las horas "
+            "cargadas; los fines de semana van sombreados.")
+    fig_head("Gráfico 3", "Eventos procesados por día", f"{fdate(first_d)} – {fdate(last_d)}")
+    show(fig_daily(dd, sel), 360, "g3")
+    full_days = dd[dd["n_hours"] >= 24]
+    if len(full_days):
+        lo, hi = full_days.loc[full_days["total_events"].idxmin()], full_days.loc[full_days["total_events"].idxmax()]
+        reading = (f"Días completos: promedio de {full_days['total_events'].mean():,.0f} eventos por día; mínimo el "
+                   f"{fdate(lo['event_date'])} ({lo['total_events']:,}) y máximo el {fdate(hi['event_date'])} ({hi['total_events']:,}). "
+                   "El volumen depende también de la cobertura del feed de GH Archive, que varía en 2026.")
+    else:
+        reading = "Aún no hay días completos: todas las barras corresponden a días parciales."
+    fig_note(reading, "Cassandra · <code>daily_totals</code> (totales) y <code>events_by_hour</code> (horas cargadas).")
 
-    dt = daily_totals()
-    if len(dt) > 1:
-        fig3 = go.Figure()
-        fig3.add_trace(go.Scatter(x=dt["event_date"], y=dt["total_events"], mode="lines+markers", name="Eventos",
-                                  line=dict(color=SERIES[0], width=2), marker=dict(size=8)))
-        fig3.update_layout(**layout(title="Tendencia diaria de eventos procesados", hovermode="x unified", showlegend=False))
-        st.plotly_chart(fig3, width="stretch")
+    section("Evolución de los indicadores", "Valor diario de los KPI 2, 3 y 4. La línea vertical marca la fecha de análisis; "
+            "los marcadores huecos son días parciales y la línea se corta donde no hay datos.")
+    c1, c2, c3 = st.columns(3, gap="large")
+    kpiv = {name: dict(zip(g["event_date"], g["kpi_value"].where(g["kpi_value"].notna(), None)))
+            for name, g in kp.groupby("kpi_name")}
+    with c1:
+        fig_head("Gráfico 4", "Crecimiento diario (KPI 2)", "variación vs. el día anterior, mismas horas")
+        show(fig_growth(dd, growth, sel), 250, "g4")
+        gvals = {d: g for d, (g, _) in growth.items() if g is not None}
+        if gvals:
+            dmax = max(gvals, key=lambda d: abs(gvals[d]))
+            fig_note(f"Azul: crece; rojo: cae. Mayor variación: {gvals[dmax]:+.1f} % el {fdate(dmax)}. Los saltos extremos suelen "
+                     "coincidir con horas de volumen atípico en el feed.", "Cassandra · <code>events_by_hour</code>.")
+    with c2:
+        fig_head("Gráfico 5", "Eventos por usuario (KPI 3)", "promedio diario por usuario activo")
+        v3s = {d: v for d, v in kpiv.get("avg_events_per_user", {}).items() if v is not None}
+        show(fig_trend(dd, v3s, sel, "Eventos / usuario", ".2f"), 250, "g5")
+        full_v3 = [v for d, v in v3s.items() if len(cov.get(d, ())) == 24]
+        if full_v3:
+            fig_note(f"Media de días completos: {sum(full_v3) / len(full_v3):.2f}. En días parciales el promedio baja porque cada "
+                     "usuario tuvo menos horas para generar eventos.", "Cassandra · <code>kpis_by_date</code>.")
+    with c3:
+        fig_head("Gráfico 6", "Tasa de fusión de PR (KPI 4)", "porcentaje de PR cerrados que se fusionaron")
+        v4s = {d: v for d, v in kpiv.get("pr_merge_rate_pct", {}).items() if v is not None}
+        show(fig_trend(dd, v4s, sel, "Fusionados (%)", ".1f", " %"), 250, "g6")
+        if v4s:
+            fig_note(f"Rango del periodo: {min(v4s.values()):.1f} %–{max(v4s.values()):.1f} %. Es una proporción, por lo que es "
+                     "comparable aun en días parciales.", "MongoDB (<code>payload.action</code>) vía <code>kpis_by_date</code>.")
 
-    o1, o2, _ = st.columns([2, 2, 6])
-    period = o1.radio("Periodo", ["Día seleccionado", f"Todo el periodo cargado ({len(dates)} días)"], horizontal=True)
-    order_opts = {"eventos": "total_events", "estrellas": "stars", "forks": "forks", "pull requests": "pull_requests", "issues": "issues"}
-    order_lbl = o2.selectbox("Ordenar por", list(order_opts))
-    sel_dates = (sel_date,) if period.startswith("Día") else tuple(dates)
-    tr = top_repos(sel_dates, top_n, order_opts[order_lbl])
-    if not tr.empty:
-        scope = f"del {sel_date:%d %b %Y}" if len(sel_dates) == 1 else f"acumulados del {min(dates):%d %b} al {max(dates):%d %b %Y}"
-        st.markdown(f"**Top {top_n} repositorios por {order_lbl}, {scope}** · eventos: Cassandra `repo_activity_by_day` · usuarios distintos: Neo4j")
-        table(tr)
-        st.caption("GH Archive registra eventos (alguien dio una estrella hoy), no estados (el repo tiene N estrellas): las cifras son actividad en el periodo, no totales históricos del repositorio.")
+    section("Repositorios y usuarios más activos", "Rankings de actividad. El periodo y el criterio de orden solo afectan a la Tabla 1.")
+    o1, o2, _ = st.columns([2.4, 2, 4])
+    period = o1.radio("Periodo de la Tabla 1", ["Día seleccionado", "Últimos 7 días"], horizontal=True)
+    order_lbl = o2.selectbox("Ordenar repositorios por", list(REPO_ES.values()))
+    order_col = {v: k for k, v in REPO_ES.items()}[order_lbl]
+    win = (sel,) if period == "Día seleccionado" else tuple(d for d in dd["event_date"] if sel - timedelta(days=6) <= d <= sel)
+    t1, t2 = st.columns([3, 2], gap="large")
+    with t1:
+        scope = fdate(sel, weekday=True) if len(win) == 1 else f"{fdate(win[0])} – {fdate(win[-1])} ({len(win)} días cargados)"
+        fig_head("Tabla 1", f"Top {top_n} repositorios por {order_lbl.lower()}", scope)
+        with st.spinner(f"Agregando {len(win)} particiones diarias de repo_activity_by_day…"):
+            rr = repo_rank(win)
+        if rr.empty:
+            st.info("Sin actividad de repositorios para el periodo.")
+        else:
+            tr = rr.sort_values([order_col, "total_events", "repo_name"], ascending=[False, False, True]).head(top_n).copy()
+            try:
+                tr["usuarios"] = tr["repo_name"].map(degree_of(tuple(tr["repo_name"]))).fillna(0)
+            except Exception:
+                tr["usuarios"] = None
+            shown = [c for c in REPO_COLS if c in (order_col, "total_events") or tr[c].sum() > 0]
+            cols = [("#", "#", "rank"), ("repo_name", "Repositorio", "name")] + [(c, REPO_ES[c], "int") for c in shown]
+            cols.append(("usuarios", "Usuarios (grafo)*", "int"))
+            st.html(table_html(tr, cols, bar=order_col, sorted_col=order_col)
+                    + '<div class="tnote">Fuente: Cassandra · <code>repo_activity_by_day</code> (suma de las particiones diarias del '
+                      "periodo). * Grado del repositorio en el grafo acumulado de Neo4j (todas las fechas), no solo el periodo. "
+                      "GH Archive registra eventos, no estados: «Estrellas» son las recibidas en el periodo, no el total histórico."
+                      + (" Las columnas sin actividad en el periodo se omiten." if len(shown) < len(REPO_COLS) else "") + "</div>")
+    with t2:
+        fig_head("Tabla 2", "Top 10 usuarios del día", fdate(sel, weekday=True))
+        ua = user_activity(sel)
+        if ua:
+            tu = pd.DataFrame(ua["top"])
+            st.html(table_html(tu, [("#", "#", "rank"), ("actor_login", "Usuario", "name"), ("event_count", "Eventos", "int"),
+                                    ("share", "% del día", "pct")], bar="event_count")
+                    + f'<div class="tnote"><b>Lectura.</b> Las cuentas automatizadas (sufijo [bot]) son {ua["bot_users"]:,} de '
+                      f'{ua["users"]:,} usuarios y generan el {ua["bot_events"] / ua["total"] * 100:.1f} % de los eventos. El 1 % más '
+                      f'activo ({ua["top1_k"]:,} cuentas) concentra el {ua["top1_events"] / ua["total"] * 100:.1f} %; la mediana es '
+                      f'{ua["median"]:.0f} evento{"" if ua["median"] == 1 else "s"} por usuario: unas pocas cuentas muy activas '
+                      'elevan el promedio del KPI 3.<br>'
+                      'Fuente: Cassandra · <code>user_activity_by_day</code>.</div>')
+
+    with st.expander("Consultas CQL de esta pestaña"):
+        st.code(f"""-- Gráficos 1 y 2: una partición (el día) de la tabla horaria
+SELECT event_hour, event_type, event_count FROM events_by_hour WHERE event_date = '{sel}';
+-- Gráfico 3: totales diarios (partición por año, ordenada por fecha DESC)
+SELECT event_date, total_events, unique_users, unique_repos FROM daily_totals WHERE year = {sel.year};
+-- Indicadores y Gráficos 4-6: KPIs calculados por Airflow
+SELECT kpi_name, kpi_value, kpi_label, computed_at FROM kpis_by_date WHERE event_date = '{sel}';
+-- Tabla 1: actividad por repositorio (una partición por día del periodo)
+SELECT repo_name, pull_requests, issues, stars, forks, pushes, total_events FROM repo_activity_by_day WHERE event_date = '{sel}';
+-- Tabla 2: eventos por usuario del día
+SELECT actor_login, event_count FROM user_activity_by_day WHERE event_date = '{sel}';""", language="sql")
 
 with tab_g:
-    gs = graph_stats()
-    g1, g2, g3 = st.columns(3)
-    g1.metric("Usuarios (nodos)", f"{gs['users']:,}")
-    g2.metric("Repositorios (nodos)", f"{gs['repos']:,}")
-    g3.metric("Relaciones", f"{gs['rels']:,}")
-    tc = graph_top_connected(top_n)
-    if not tc.empty:
-        fig = hbar(tc["usuarios"], tc["repo"], SERIES[6], "Repositorios con más usuarios conectados (grado del nodo)",
-                   hover="%{y}<br>%{x} usuarios distintos<extra></extra>", height=max(320, 32 * len(tc) + 80))
-        fig.update_yaxes(autorange="reversed")
-        st.plotly_chart(fig, width="stretch")
-        repo = st.selectbox("Explorar vecinos de", tc["repo"].tolist())
-        nb = graph_neighbors(repo)
-        table(nb.set_index("usuario"))
-        st.code(f"MATCH (u:User)-[r]->(repo:Repo {{name:'{repo}'}})\nRETURN u.login, type(r), r.count ORDER BY r.count DESC", language="cypher")
+    try:
+        gs = graph_stats()
+        gt = graph_top(top_n)
+    except Exception as exc:
+        st.error(f"No se pudo consultar Neo4j: {exc}")
+    else:
+        rels = gs["rels"]
+        inter = sum(rels.get(t, 0) for t in REL_ES)
+        st.html('<p class="tab-lead">Modelo de grafo: <code>(:User)-[:PUSHED | OPENED_PR | OPENED_ISSUE | STARRED | FORKED '
+                '{count, first_seen, last_seen}]-&gt;(:Repo)-[:BELONGS_TO]-&gt;(:Org)</code>. Es <b>acumulado</b>: reúne todas las '
+                "fechas cargadas, por lo que no depende de la fecha de análisis. Consultas en vivo.</p>")
+        st.html('<div class="stats">'
+                + stat("Usuarios", f"{gs['users']:,}", "nodos <code>:User</code>")
+                + stat("Repositorios", f"{gs['repos']:,}", "nodos <code>:Repo</code>")
+                + stat("Organizaciones", f"{gs['orgs']:,}", "nodos <code>:Org</code>")
+                + stat("Interacciones", f"{inter:,}", "relaciones usuario → repositorio")
+                + stat("Pertenencias", f"{rels.get('BELONGS_TO', 0):,}", "relaciones repositorio → organización") + "</div>")
+        a, b = st.columns([2, 3], gap="large")
+        with a:
+            fig_head("Gráfico 7", "Interacciones por tipo de relación", "porcentaje y número de relaciones")
+            rt = sorted(((t, rels.get(t, 0)) for t in REL_ES), key=lambda x: -x[1])
+            show(hbar([REL_ES[t] for t, _ in rt], [v for _, v in rt], [REL_COLOR[t] for t, _ in rt],
+                      [f"{v / inter * 100:.1f} %  ·  {fnum(v)}" if inter else "0" for _, v in rt],
+                      "<b>%{y}</b> (%{customdata})<br>%{x:,} relaciones<extra></extra>", customdata=[t for t, _ in rt],
+                      height=300), 300, "g7")
+            if inter:
+                fig_note(f"{REL_ES[rt[0][0]]} representa el {rt[0][1] / inter * 100:.1f} % de las {inter:,} interacciones. Solo cinco "
+                         "tipos de evento generan relaciones en el grafo.", "Neo4j · conteo por tipo de relación.")
+        with b:
+            if gt.empty:
+                st.info("El grafo aún no tiene relaciones.")
+            else:
+                repo = st.selectbox("Repositorio a explorar (Gráficos 8 y 9)", gt["repo"].tolist())
+                fig_head("Gráfico 8", f"Top {top_n} repositorios por usuarios conectados", "grado del nodo: usuarios distintos con al menos una relación")
+                show(hbar(gt["repo"].tolist(), gt["usuarios"].tolist(),
+                          [DB_COLOR["Neo4j"] if r == repo else OTHER for r in gt["repo"]], [f"{v:,}" for v in gt["usuarios"]],
+                          "<b>%{y}</b><br>%{x:,} usuarios distintos · %{customdata:,} interacciones<extra></extra>",
+                          customdata=gt["interacciones"].tolist()), 34 * len(gt) + 24, "g8")
+                note = (f"{gt['repo'].iloc[0]} encabeza el ranking con {gt['usuarios'].iloc[0]:,} usuarios distintos (KPI 5 calculado "
+                        "en vivo). La barra resaltada es el repositorio explorado abajo.")
+                if r5 and d5 is not None and (r5 != gt["repo"].iloc[0] or int(d5) != int(gt["usuarios"].iloc[0])):
+                    note += (f" El KPI 5 guardado para el {fdate(sel, year=False)} ({esc(r5)}, {d5:,.0f} usuarios) refleja el grafo en el "
+                             "momento del cálculo; el grafo crece con cada carga.")
+                fig_note(note, "Neo4j · grado por repositorio.")
+        if not gt.empty:
+            eg = ego(repo)
+            if eg["users"]:
+                e1, e2 = st.columns([3, 2], gap="large")
+                with e1:
+                    fig_head("Gráfico 9", f"Vecindario de {esc(repo)}",
+                             f"{len(eg['users'])} de {eg['deg']:,} usuarios conectados (los de más interacciones); sector = relación dominante")
+                    show(fig_ego(repo, eg), 520, "g9")
+                    org = f" Pertenece a la organización <b>{esc(eg['org'])}</b>." if eg.get("org") else ""
+                    fig_note(f"{eg['deg']:,} usuarios distintos y {eg['inter']:,} interacciones acumuladas; {eg['bots']:,} cuentas "
+                             f"automatizadas (rombos).{org} El tamaño del nodo es proporcional a sus interacciones.",
+                             "Neo4j · patrón <code>(:User)-[r]-&gt;(:Repo {name})</code>.")
+                with e2:
+                    fig_head("Tabla 3", "Usuarios con más interacciones", "relaciones y periodo de actividad en el repositorio")
+                    nb = pd.DataFrame([{
+                        "usuario": u["usuario"],
+                        "rels": " · ".join(f"{REL_ES.get(r['tipo'], r['tipo'])} ×{r['veces']:,}" for r in u["rels"]),
+                        "desde": fdate(min(r["desde"] for r in u["rels"] if r["desde"]).date(), year=False) if any(r["desde"] for r in u["rels"]) else "—",
+                        "hasta": fdate(max(r["hasta"] for r in u["rels"] if r["hasta"]).date(), year=False) if any(r["hasta"] for r in u["rels"]) else "—",
+                    } for u in sorted(eg["users"], key=lambda u: -(u["total"] or 0))[:12]])
+                    st.html(table_html(nb, [("usuario", "Usuario", "name"), ("rels", "Relaciones (interacciones)", "text"),
+                                            ("desde", "Primera", "nw"), ("hasta", "Última", "nw")])
+                            + '<div class="tnote">Primera y última actividad: propiedades <code>first_seen</code> y '
+                              "<code>last_seen</code> de las relaciones.</div>")
+        with st.expander("Consultas Cypher de esta pestaña"):
+            st.code("""// Gráfico 7: relaciones por tipo (Neo4j responde desde su count store)
+MATCH ()-[r:PUSHED]->() RETURN count(r)          // una consulta por tipo de relación
+// Gráfico 8 y KPI 5: grado (usuarios distintos) por repositorio
+MATCH (u:User)-[r]->(repo:Repo)
+RETURN repo.name, count(DISTINCT u) AS usuarios, sum(r.count) AS interacciones
+ORDER BY usuarios DESC LIMIT %d
+// Gráfico 9 y Tabla 3: vecindario del repositorio
+MATCH (u:User)-[r]->(:Repo {name: '%s'})
+RETURN u.login, type(r), r.count, r.first_seen, r.last_seen ORDER BY r.count DESC""" % (top_n, repo if not gt.empty else ""),
+                    language="cypher")
 
 with tab_m:
-    total, by_type, recent = mongo_overview()
-    m1, m2 = st.columns([1, 3])
-    m1.metric("Documentos en `events`", f"{total:,}")
-    if not by_type.empty:
-        by_type = by_type.head(8).sort_values("n")
-        fig = hbar(by_type["n"], by_type["tipo"], SERIES[2], "Documentos por tipo (aggregate $group)",
-                   text=by_type["n"].map("{:,}".format))
-        m2.plotly_chart(fig, width="stretch")
-    st.markdown("**Últimos eventos ingeridos** (colección `events`)")
-    table(recent.set_index("id"), int_cols=[])
-    with st.expander("Ver un documento completo"):
-        doc = config.mongo_db().events.find_one(sort=[("created_at", -1)])
-        st.json(doc, expanded=False)
+    try:
+        mo, md = mongo_overview(), mongo_day(sel)
+    except Exception as exc:
+        st.error(f"No se pudo consultar MongoDB: {exc}")
+    else:
+        st.html('<p class="tab-lead">Colección <code>events</code>: un documento JSON por evento con <code>actor</code>, '
+                "<code>repo</code>, <code>created_at</code> y el <code>payload</code> propio de cada tipo. Es la única capa que conserva "
+                "el payload, por eso el KPI 4 se calcula aquí.</p>")
+        cass_n = int(day_row["total_events"])
+        diff = md["count"] - cass_n
+        rec = (f"{md['count'] / cass_n * 100:.1f} %" if cass_n else "—")
+        st.html('<div class="stats">'
+                + stat("Documentos en la colección", f"{mo['total']:,}", "estimación por metadatos de la colección")
+                + stat(f"Documentos del {fdate(sel, year=False)}", f"{md['count']:,}", "consulta por rango de <code>created_at</code>")
+                + stat("Conciliación con Cassandra", rec,
+                       "coincide con <code>daily_totals</code>" if diff == 0 else f"{diff:+,} documentos frente a <code>daily_totals</code>")
+                + stat("Periodo almacenado", f"{fdate(mo['first'].date(), year=False)} – {fdate(mo['last'].date())}" if mo["first"] else "—",
+                       "primer y último <code>created_at</code>") + "</div>")
+        a, b = st.columns([3, 2], gap="large")
+        acts = md["actions"]
+        with a:
+            fig_head("Gráfico 10", "Ciclo de vida de los pull requests", f"eventos PullRequestEvent del {fdate(sel, weekday=True)} por <code>payload.action</code>")
+            if acts:
+                ordered = sorted(acts.items(), key=lambda x: -x[1])
+                show(hbar([PR_ACTION_ES.get(k, k) for k, _ in ordered], [v for _, v in ordered],
+                          [ACCENT if k in ("merged", "closed") else OTHER for k, _ in ordered], [f"{v:,}" for _, v in ordered],
+                          "<b>%{y}</b> (payload.action = %{customdata})<br>%{x:,} eventos<extra></extra>",
+                          customdata=[k for k, _ in ordered]), 34 * len(ordered) + 24, "g10")
+                merged, closed = acts.get("merged", 0), acts.get("closed", 0)
+                if merged + closed:
+                    fig_note(f"Las barras azules forman el KPI 4: {merged:,} / ({merged:,} + {closed:,}) = "
+                             f"<b>{merged / (merged + closed) * 100:.1f} %</b>. Las demás acciones (abrir, etiquetar, asignar) no cierran "
+                             "un PR y no intervienen.", "MongoDB · <code>events</code> (agregación sobre <code>payload.action</code>).")
+            else:
+                st.info("No hay eventos PullRequestEvent en el día.")
+        with b:
+            fig_head("Consulta", "Agregación que calcula el KPI 4", "se ejecuta en la etapa 6 del DAG (índice ix_type_date)")
+            st.code(f"""db.events.aggregate([
+  {{ $match: {{
+      type: "PullRequestEvent",
+      created_at: {{
+        $gte: ISODate("{sel}T00:00:00Z"),
+        $lt:  ISODate("{sel + timedelta(days=1)}T00:00:00Z") }} }} }},
+  {{ $group: {{ _id: "$payload.action", n: {{ $sum: 1 }} }} }}
+])
+// KPI 4 = n(merged) / (n(merged) + n(closed)) × 100""", language="javascript")
+        fig_head("Tabla 4", "Muestra de documentos del día", "los 10 eventos más recientes de la fecha (orden por created_at)")
+        if md["latest"]:
+            st.html(table_html(pd.DataFrame(md["latest"]), [("hora", "Hora (UTC)", "text"), ("tipo", "Tipo", "text"),
+                                                            ("tecnico", "Tipo técnico", "text"), ("usuario", "Usuario", "name"),
+                                                            ("repo", "Repositorio", "name"), ("accion", "payload.action", "text")]))
+        if md["sample"]:
+            with st.expander("Ver el documento JSON completo del evento más reciente"):
+                st.json(md["sample"], expanded=True)
 
 with tab_doc:
-    st.markdown("""
-| KPI | BD fuente | Definición | Fórmula | Interpretación |
-|---|---|---|---|---|
-| Eventos del día | Cassandra | Registros procesados por el pipeline en el día | `Σ events_by_hour.event_count` | Volumen ingerido; base del resto |
-| Crecimiento diario | Cassandra | Variación porcentual vs. las mismas horas del día anterior | `(E(d) − E(d−1)) / E(d−1) × 100` | >0: la actividad crece |
-| Prom. eventos/usuario | Cassandra | Intensidad de actividad | `E(d) / daily_totals.unique_users(d)` | Valores altos: usuarios muy activos o bots |
-| Tasa de fusión de PRs | MongoDB | Porcentaje de pull requests resueltos que fueron aceptados | `merged(d) / (merged(d) + closed(d)) × 100` sobre `payload.action` | Salud del flujo de contribución; solo existe en el documento original |
-| Repo más conectado | Neo4j | Repositorio con más usuarios distintos (grado del nodo) | `MATCH (u)-[]->(r) RETURN r, count(DISTINCT u)` | Proyecto que concentra comunidad (o actividad automatizada si es anómalo) |
+    section("Definición de los indicadores", "Cada KPI tiene definición, fórmula e interpretación; las cinco bases de cálculo cubren las tres bases de datos.")
+    kdf = pd.DataFrame([{**kd, "no": f"KPI {kd['no']}", "db_html": f'<span class="sw" style="background:{DB_COLOR[kd["db"]]}"></span> {kd["db"]}',
+                         "formula_html": f"<code>{esc(kd['formula'])}</code>"} for kd in KPI_DEF])
+    st.html(table_html(kdf, [("no", "N.º", "nw"), ("name", "Indicador", "name"), ("db_html", "Base de datos", "html"),
+                             ("definition", "Definición", "text"), ("formula_html", "Fórmula", "html"),
+                             ("reading", "Interpretación", "text")], cls="t def"))
 
-**Flujo por capas:** GH Archive (JSON/hora) → Airflow: extracción → limpieza → **MongoDB** (capa de documentos originales) → **Cassandra** lee MongoDB y escribe agregados por hora/día + `user_repo_interactions_by_hour` → **Neo4j** lee esa tabla de Cassandra y construye (Usuario)→(Repo)→(Org) → KPIs leen las tres BDs y se guardan en `kpis_by_date`.
-""")
+    section("Cobertura y calidad de la carga", "Una fila por día. Las horas provienen de <code>events_by_hour</code>; los conteos, "
+            "de la tabla de trazabilidad <code>pipeline_runs</code> que escribe cada corrida del DAG.")
+    rn = runs()
+    agg = (rn.groupby("run_date").agg(raw=("raw_count", "sum"), clean=("clean_count", "sum"), mongo=("loaded_mongo", "sum"),
+                                       neo=("loaded_neo4j", "sum")) if not rn.empty else pd.DataFrame())
+    rows = []
+    for d in dates:
+        a = agg.loc[d] if d in agg.index else None
+        n = len(cov[d])
+        state = ('<span class="badge ok">Completo</span>' if n == 24 else
+                 '<span class="badge warn">En curso</span>' if d == today_utc else '<span class="badge warn">Parcial</span>')
+        rows.append({"fecha": fdate(d, weekday=True), "horas": f'<span class="nw">{hour_strip(cov[d])}&nbsp; {n}/24</span>', "estado": state,
+                     "clean": None if a is None else a["clean"],
+                     "desc": None if a is None else a["raw"] - a["clean"],
+                     "mongo": None if a is None else a["mongo"], "neo": None if a is None else a["neo"],
+                     "users": int(dd.set_index("event_date").at[d, "unique_users"])})
+    st.html(table_html(pd.DataFrame(rows), [("fecha", "Fecha", "nw"), ("horas", "Horas con datos", "html"), ("estado", "Estado", "html"),
+                                            ("clean", "Eventos válidos", "int"), ("desc", "Descartados", "int"),
+                                            ("mongo", "Insertados en MongoDB", "int"), ("neo", "Aristas Neo4j", "int"),
+                                            ("users", "Usuarios activos", "int")])
+            + '<div class="tnote">Descartados = eventos crudos que no superan la validación (campos obligatorios, fecha ISO-8601, '
+              "id duplicado). Insertados en MongoDB = documentos nuevos de cada corrida: al reintentar una hora los documentos ya "
+              "existentes no se duplican, por eso puede ser menor que los eventos válidos (la conciliación exacta está en la "
+              "pestaña MongoDB). Aristas Neo4j = relaciones usuario→repositorio fusionadas en el grafo durante esas horas.</div>")
+
+    section("Arquitectura y flujo de datos", "DAG <code>github_events_pipeline</code> de Apache Airflow, programado cada hora. "
+            "Cada etapa lee la salida de la anterior: la arquitectura es por capas.")
+    steps = [("Fuente", "GH Archive", "Un archivo JSON comprimido por hora con los eventos públicos de GitHub.", "#9a9ea8"),
+             ("Etapas 1-2", "Extracción y limpieza", "Descarga; campos obligatorios, fecha ISO-8601, deduplicación por id y payload recortado.", "#9a9ea8"),
+             ("Etapa 3", "MongoDB", "Colección <code>events</code>: el documento original de cada evento.", DB_COLOR["MongoDB"]),
+             ("Etapa 4", "Cassandra", "Lee MongoDB y escribe agregados por hora y día e interacciones usuario→repositorio.", DB_COLOR["Cassandra"]),
+             ("Etapa 5", "Neo4j", "Lee <code>user_repo_interactions_by_hour</code> y fusiona Usuario→Repositorio→Organización.", DB_COLOR["Neo4j"]),
+             ("Etapa 6", "Indicadores", "Cinco KPI (al menos uno por base de datos) guardados en <code>kpis_by_date</code>.", "#9a9ea8"),
+             ("Consumo", "Dashboard", "Streamlit consulta las tres bases de datos.", "#9a9ea8")]
+    st.html('<div class="flow">' + '<span class="ar">→</span>'.join(
+        f'<div class="st" style="--c:{c}"><div class="k">{k}</div><div class="t">{t}</div><div class="d">{d}</div></div>'
+        for k, t, d, c in steps) + "</div>")
+    just = pd.DataFrame([
+        {"db": f'<span class="sw" style="background:{DB_COLOR["MongoDB"]}"></span> MongoDB', "que": "Documento JSON original de cada evento (actor, repo, payload, fecha).",
+         "porque": "Esquema flexible: cada tipo de evento trae un payload distinto. Permite agregaciones sobre campos anidados como payload.action."},
+        {"db": f'<span class="sw" style="background:{DB_COLOR["Cassandra"]}"></span> Cassandra', "que": "Series temporales y agregados por hora y día; KPIs por fecha.",
+         "porque": "Escrituras masivas append-only y lecturas de una partición (el día) en tiempo constante; tablas diseñadas por consulta, sin JOIN."},
+        {"db": f'<span class="sw" style="background:{DB_COLOR["Neo4j"]}"></span> Neo4j', "que": "Grafo Usuario→Repositorio→Organización con conteo de interacciones.",
+         "porque": "Grado, vecindario y caminos se resuelven recorriendo relaciones, sin los JOIN encadenados que exigiría un modelo tabular."}])
+    st.html(table_html(just, [("db", "Base de datos", "html"), ("que", "Qué almacena", "text"), ("porque", "Por qué esa base de datos", "text")], cls="t def"))
+
+    section("Notas para la interpretación")
+    st.html(f"""<ul class="notes">
+<li>Todas las fechas y horas están en UTC (Lima = UTC−5): un «día» va de 00:00 a 23:59 UTC.</li>
+<li>Un día es <b>parcial</b> si tiene menos de 24 horas cargadas (día en curso o carga histórica incompleta). Sus totales no son
+comparables con los de días completos; el KPI 2 compara solo las horas presentes en ambos días.</li>
+<li>El volumen del feed de GH Archive en 2026 cambia de forma abrupta entre horas (p. ej., de ~80 mil a ~7 mil eventos por hora) y
+algunos tipos (Push, creación y borrado de ramas) aparecen de forma intermitente: esas variaciones vienen de la fuente y no
+necesariamente de la actividad real en GitHub.</li>
+<li>El grafo de Neo4j es acumulado y, para acotar su tamaño, cada hora incorpora solo los {config.NEO4J_TOP_REPOS:,} repositorios y
+{config.NEO4J_TOP_USERS:,} usuarios más activos; únicamente cinco tipos de evento generan relaciones.</li>
+<li>GH Archive registra eventos, no estados: «estrellas» o «forks» son los recibidos en el periodo, no el total histórico del repositorio.</li>
+<li>Las cuentas con sufijo [bot] (p. ej., <code>github-actions[bot]</code>) son automatizaciones y se incluyen en todos los indicadores.</li>
+</ul>""")
+
+st.html('<div class="foot"><span>Fuente de datos: GH Archive (gharchive.org), eventos públicos de GitHub. Elaboración propia.</span>'
+        "<span>Proyecto Grupal II · Big Data · UTEC · 2026</span></div>")
