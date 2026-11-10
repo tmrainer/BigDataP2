@@ -23,17 +23,67 @@ import config  # noqa: E402
 # Paleta categórica en orden fijo (validada para daltonismo) + secuencial azul.
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 SEQ = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#1c5cab", "#0d366b"]
-INK, INK2, MUTED, GRID = "#0b0b0b", "#52514e", "#898781", "#e1e0d9"
+INK, INK2, MUTED, GRID = "#111111", "#3b3f46", "#5f6572", "#d6d8dd"
+FONT = "IBM Plex Sans, Inter, Segoe UI, system-ui, sans-serif"
+DB_COLOR = {"Cassandra": "#2a78d6", "MongoDB": "#008300", "Neo4j": "#6250d6"}   # mismos tonos que las series 1, 6 y 7
 LAYOUT = dict(
     template="simple_white",
-    font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=INK2, size=13),
-    margin=dict(l=8, r=16, t=36, b=8),
+    font=dict(family=FONT, color=INK2, size=14),
+    title=dict(font=dict(size=18, color=INK, family=FONT), x=0, xanchor="left"),
+    margin=dict(l=8, r=16, t=44, b=8),
     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-    xaxis=dict(showgrid=False, linecolor="#c3c2b7", tickfont=dict(color=MUTED)),
-    yaxis=dict(gridcolor=GRID, showline=False, tickfont=dict(color=MUTED), zeroline=False),
-    hoverlabel=dict(bgcolor="#ffffff", font=dict(color=INK)),
-    legend=dict(orientation="h", y=-0.28, yanchor="top", x=0, font=dict(color=INK2)),
+    xaxis=dict(showgrid=False, linecolor="#9a9ea8", tickfont=dict(color=INK2, size=13)),
+    yaxis=dict(gridcolor=GRID, showline=False, tickfont=dict(color=INK2, size=13), zeroline=False),
+    hoverlabel=dict(bgcolor="#ffffff", font=dict(color=INK, size=14, family=FONT)),
+    legend=dict(orientation="h", y=-0.28, yanchor="top", x=0, font=dict(color=INK2, size=13)),
 )
+
+CSS = """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] * { font-family: 'IBM Plex Sans', Inter, 'Segoe UI', system-ui, sans-serif; }
+[data-testid="stAppViewContainer"] { color: #111111; }
+.block-container { padding-top: 1.6rem; padding-bottom: 2rem; max-width: 1500px; }
+h1 { font-size: 2.1rem !important; font-weight: 700 !important; color: #111111 !important; letter-spacing: -0.01em; margin-bottom: 0.2rem !important; }
+h2, h3 { color: #111111 !important; font-weight: 600 !important; }
+p, li, label, .stMarkdown { font-size: 1.02rem; line-height: 1.5; }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { font-size: 0.95rem !important; color: #3b3f46 !important; }
+button[data-baseweb="tab"] p { font-size: 1.08rem !important; font-weight: 600 !important; color: #3b3f46; }
+button[data-baseweb="tab"][aria-selected="true"] p { color: #1f4e9c; }
+[data-testid="stWidgetLabel"] p { font-size: 0.95rem !important; font-weight: 600; color: #3b3f46; text-transform: uppercase; letter-spacing: 0.04em; }
+.kpi { background: #f2f4f8; border-radius: 10px; padding: 14px 18px 12px 18px; min-height: 158px; border: 1px solid #e3e6ec; }
+.kpi-label { font-size: 0.9rem; font-weight: 600; color: #3b3f46; text-transform: uppercase; letter-spacing: 0.05em; }
+.kpi-value { font-size: 2.5rem; font-weight: 700; color: #111111; line-height: 1.15; margin: 4px 0 2px 0; font-variant-numeric: tabular-nums; word-break: break-all; }
+.kpi-note { font-size: 1rem; color: #1f2937; }
+.kpi-src { font-size: 0.85rem; color: #5f6572; margin-top: 8px; }
+.kpi-src code { font-size: 0.82rem; }
+[data-testid="stTable"] table { font-size: 1rem; border-collapse: collapse; }
+[data-testid="stTable"] th { font-weight: 700 !important; color: #111111 !important; background: #f2f4f8; border-bottom: 2px solid #9a9ea8 !important; text-align: left; }
+[data-testid="stTable"] td { color: #111111; border-bottom: 1px solid #e3e6ec !important; font-variant-numeric: tabular-nums; }
+[data-testid="stTable"] tbody tr:nth-child(even) td { background: #fafbfc; }
+[data-testid="stMetricValue"] { font-size: 2.2rem; font-weight: 700; color: #111111; }
+[data-testid="stMetricLabel"] p { font-size: 0.95rem !important; font-weight: 600; color: #3b3f46; }
+</style>
+"""
+
+
+def table(df: pd.DataFrame, int_cols: list[str] | None = None):
+    """Tabla HTML (st.table) con miles separados; se puede estilizar con CSS, a diferencia de st.dataframe."""
+    cols = int_cols if int_cols is not None else [c for c in df.columns if pd.api.types.is_integer_dtype(df[c])]
+    st.table(df.style.format({c: "{:,.0f}" for c in cols}))
+
+
+def card(col, label, value, note, source, table_ref=""):
+    color = DB_COLOR[source]
+    col.markdown(
+        f'<div class="kpi" style="border-left:6px solid {color}">'
+        f'<div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        f'<div class="kpi-note">{note}</div>'
+        f'<div class="kpi-src"><span style="color:{color};font-weight:700">■</span> {source}'
+        + (f' · <code>{table_ref}</code>' if table_ref else "") + '</div></div>',
+        unsafe_allow_html=True)
 
 
 def hbar(x, y, color, title, text=None, hover=None, height=None) -> go.Figure:
@@ -57,8 +107,9 @@ def layout(**overrides) -> dict:
     return out
 
 st.set_page_config(page_title="GitHub Events · Multimodelo", page_icon="📊", layout="wide")
+st.markdown(CSS, unsafe_allow_html=True)
 st.title("GitHub Events · Arquitectura multimodelo")
-st.caption("MongoDB (documentos) · Cassandra (series temporales) · Neo4j (grafo) · orquestado con Apache Airflow")
+st.caption("MongoDB (documentos) → Cassandra (series temporales) → Neo4j (grafo) · orquestado con Apache Airflow")
 
 
 # ------------------------------------------------------------------ datos (cache 5 min)
@@ -191,25 +242,32 @@ top_n = f2.slider("Top N repositorios", 5, 20, 10)
 k = kpis_for(sel_date)
 kv = {r.kpi_name: r for r in k.itertuples()} if not k.empty else {}
 
-def tile(col, label, kpi, fmt="{:,.0f}", suffix=""):
+def _v(kpi):
     r = kv.get(kpi)
-    col.metric(label, (fmt.format(r.kpi_value) + suffix) if r is not None else "—", help=r.kpi_label if r is not None else None)
+    return r.kpi_value if r is not None else None
 
-SOURCE_BADGE = {"Cassandra": "⏱ Cassandra", "MongoDB": "📄 MongoDB", "Neo4j": "🕸 Neo4j"}
+
+def _lbl(kpi):
+    r = kv.get(kpi)
+    return r.kpi_label if r is not None else ""
+
+
 c = st.columns(5)
-tile(c[0], "Eventos del día", "events_per_day")
-c[0].caption(SOURCE_BADGE["Cassandra"] + " · `events_by_hour`")
-tile(c[1], "Crecimiento diario", "daily_growth_pct", "{:+.1f}", " %")
-c[1].caption(SOURCE_BADGE["Cassandra"] + " · `events_by_hour`")
-tile(c[2], "Prom. eventos / usuario", "avg_events_per_user", "{:.2f}")
-c[2].caption(SOURCE_BADGE["Cassandra"] + " · `daily_totals`")
-tile(c[3], "Tasa de fusión de PRs", "pr_merge_rate_pct", "{:.1f}", " %")
-c[3].caption(SOURCE_BADGE["MongoDB"] + " · `events.payload.action`")
+v = _v("events_per_day")
+card(c[0], "Eventos del día", f"{v:,.0f}" if v is not None else "—", "registros procesados por el pipeline", "Cassandra", "events_by_hour")
+v = _v("daily_growth_pct")
+if v is None:
+    gv = "—"
+else:
+    gv = f'<span style="color:{"#008300" if v >= 0 else "#c0392b"}">{v:+.1f} %</span>'
+card(c[1], "Crecimiento diario", gv, _lbl("daily_growth_pct") or "vs. día anterior, mismas horas", "Cassandra", "events_by_hour")
+v = _v("avg_events_per_user")
+card(c[2], "Eventos por usuario", f"{v:.2f}" if v is not None else "—", _lbl("avg_events_per_user") or "promedio del día", "Cassandra", "daily_totals")
+v = _v("pr_merge_rate_pct")
+card(c[3], "PRs aceptados", f"{v:.1f} %" if v is not None else "—", _lbl("pr_merge_rate_pct") or "merged / (merged + cerrados)", "MongoDB", "events.payload.action")
 r = kv.get("top_repo_connections")
 _name = r.kpi_label if r is not None else "—"
-c[4].metric("Repo más conectado", _name if len(_name) <= 22 else _name[:21] + "…",
-            help=(f"{_name}: " if r is not None else "") + "repositorio con más usuarios distintos conectados (grado del nodo en Neo4j)")
-c[4].caption(SOURCE_BADGE["Neo4j"] + (f" · **{r.kpi_value:.0f} usuarios distintos**" if r is not None else ""))
+card(c[4], "Repo más conectado", _name, f"<b>{r.kpi_value:,.0f} usuarios distintos</b> (grado del nodo)" if r is not None else "", "Neo4j", "(User)-[]->(Repo)")
 if kv:
     st.caption(f"KPIs calculados por Airflow a las {list(kv.values())[0].computed_at:%H:%M} UTC · fuente: Cassandra `kpis_by_date`")
 
@@ -252,7 +310,7 @@ with tab_c:
     if not tr.empty:
         scope = f"del {sel_date:%d %b %Y}" if len(sel_dates) == 1 else f"acumulados del {min(dates):%d %b} al {max(dates):%d %b %Y}"
         st.markdown(f"**Top {top_n} repositorios por {order_lbl}, {scope}** · eventos: Cassandra `repo_activity_by_day` · usuarios distintos: Neo4j")
-        st.dataframe(tr, width="stretch")
+        table(tr)
         st.caption("GH Archive registra eventos (alguien dio una estrella hoy), no estados (el repo tiene N estrellas): las cifras son actividad en el periodo, no totales históricos del repositorio.")
 
 with tab_g:
@@ -269,7 +327,7 @@ with tab_g:
         st.plotly_chart(fig, width="stretch")
         repo = st.selectbox("Explorar vecinos de", tc["repo"].tolist())
         nb = graph_neighbors(repo)
-        st.dataframe(nb, width="stretch", hide_index=True)
+        table(nb.set_index("usuario"))
         st.code(f"MATCH (u:User)-[r]->(repo:Repo {{name:'{repo}'}})\nRETURN u.login, type(r), r.count ORDER BY r.count DESC", language="cypher")
 
 with tab_m:
@@ -282,7 +340,7 @@ with tab_m:
                    text=by_type["n"].map("{:,}".format))
         m2.plotly_chart(fig, width="stretch")
     st.markdown("**Últimos eventos ingeridos** (colección `events`)")
-    st.dataframe(recent, width="stretch", hide_index=True)
+    table(recent.set_index("id"), int_cols=[])
     with st.expander("Ver un documento completo"):
         doc = config.mongo_db().events.find_one(sort=[("created_at", -1)])
         st.json(doc, expanded=False)
