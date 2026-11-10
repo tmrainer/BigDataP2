@@ -56,25 +56,61 @@ DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 
 KPI_DEF = [
     dict(no=1, key="events_per_day", name="Eventos procesados", db="Cassandra", table="events_by_hour",
+         long="Número de eventos procesados por día", question="¿Cuánta actividad pública de GitHub ingirió el pipeline en el día?",
          definition="Número de eventos públicos de GitHub procesados por el pipeline en el día (UTC).",
          formula="Σ events_by_hour.event_count  (event_date = D)",
-         reading="Volumen de actividad ingerido; base de los demás indicadores. En un día parcial depende de las horas cargadas."),
+         tex=r"E_D \;=\; \sum_{h \,\in\, H_D} \; \sum_{t} \; n_{D,h,t}",
+         symbols="<i>n<sub>D,h,t</sub></i>: eventos del tipo <i>t</i> en la hora <i>h</i> del día <i>D</i> (una fila de "
+                 "<code>events_by_hour</code>). <i>H<sub>D</sub></i>: horas cargadas del día.",
+         reading="Volumen de actividad ingerido; base de los demás indicadores. Solo es comparable entre días con las mismas "
+                 "horas cargadas: en un día parcial conviene mirar el promedio por hora.",
+         lang="sql", impl="SELECT event_hour, event_type, event_count\nFROM events_by_hour\nWHERE event_date = '{d}';\n"
+                          "-- E_D = suma de event_count de toda la partición"),
     dict(no=2, key="daily_growth_pct", name="Crecimiento diario", db="Cassandra", table="events_by_hour",
+         long="Crecimiento diario de eventos", question="¿La actividad sube o baja respecto del día anterior?",
          definition="Variación porcentual del volumen respecto del día anterior, sobre las horas cargadas en ambos días.",
          formula="(E_D(H) − E_D−1(H)) / E_D−1(H) × 100,  H = horas presentes en D y D−1",
-         reading="> 0: la actividad crece; < 0: disminuye. Sin datos del día anterior no se calcula (N/D)."),
+         tex=r"G_D \;=\; \frac{E_D(H) - E_{D-1}(H)}{E_{D-1}(H)} \times 100, \qquad H = H_D \cap H_{D-1}",
+         symbols="<i>E<sub>D</sub>(H)</i>: eventos del día <i>D</i> sumando solo las horas de <i>H</i>, el conjunto de horas "
+                 "cargadas en ambos días. Sin datos del día anterior el indicador no se calcula (N/D).",
+         reading="G &gt; 0: la actividad crece; G &lt; 0: disminuye. Variaciones muy grandes suelen reflejar cambios de "
+                 "cobertura del feed de GH Archive más que cambios reales de actividad.",
+         lang="sql", impl="SELECT event_hour, event_count FROM events_by_hour WHERE event_date = '{d}';\n"
+                          "SELECT event_hour, event_count FROM events_by_hour WHERE event_date = '{d1}';\n"
+                          "-- se suman solo las horas presentes en ambas particiones"),
     dict(no=3, key="avg_events_per_user", name="Eventos por usuario", db="Cassandra", table="daily_totals",
+         long="Promedio de actividad por usuario", question="¿Con qué intensidad participa cada usuario activo?",
          definition="Promedio de eventos por usuario activo (actor distinto) en el día.",
          formula="E_D / daily_totals.unique_users(D)",
-         reading="Intensidad de uso. Valores altos señalan cuentas muy activas o automatizadas (bots)."),
+         tex=r"A_D \;=\; \frac{E_D}{U_D}",
+         symbols="<i>E<sub>D</sub></i>: eventos del día (KPI 1). <i>U<sub>D</sub></i>: usuarios distintos (actores) del día, "
+                 "<code>daily_totals.unique_users</code>.",
+         reading="Intensidad de uso. Valores altos señalan cuentas muy activas o automatizadas (bots); como la distribución es "
+                 "muy asimétrica, el promedio describe intensidad, no al usuario típico.",
+         lang="sql", impl="SELECT total_events, unique_users\nFROM daily_totals\nWHERE year = {y} AND event_date = '{d}';"),
     dict(no=4, key="pr_merge_rate_pct", name="Tasa de fusión de PR", db="MongoDB", table="payload.action",
+         long="Tasa de fusión de pull requests", question="¿Qué proporción de los pull requests cerrados se acepta?",
          definition="Porcentaje de los pull requests cerrados en el día que fueron fusionados (aceptados).",
          formula="merged_D / (merged_D + closed_D) × 100,  según payload.action",
-         reading="Salud del flujo de contribución. Solo se calcula desde el documento original: Cassandra no guarda payload.action."),
+         tex=r"T_D \;=\; \frac{F_D}{F_D + N_D} \times 100",
+         symbols="<i>F<sub>D</sub></i>: PullRequestEvent del día con <code>payload.action = merged</code> (fusionados). "
+                 "<i>N<sub>D</sub></i>: con <code>payload.action = closed</code> (cerrados sin fusionar).",
+         reading="Salud del flujo de contribución: cuánto de lo que se revisa termina aceptándose. Solo se calcula desde el "
+                 "documento original, porque Cassandra no guarda <code>payload.action</code>.",
+         lang="javascript", impl='db.events.aggregate([\n  { $match: {\n      type: "PullRequestEvent",\n      created_at: {\n'
+                                 '        $gte: ISODate("{d}T00:00:00Z"),\n        $lt:  ISODate("{dn}T00:00:00Z") } } },\n'
+                                 '  { $group: { _id: "$payload.action", n: { $sum: 1 } } }\n])'),
     dict(no=5, key="top_repo_connections", name="Repositorio más conectado", db="Neo4j", table="(:User)-[]->(:Repo)",
+         long="Repositorio con mayor número de conexiones", question="¿Qué proyecto concentra más comunidad?",
          definition="Repositorio con más usuarios distintos conectados (grado del nodo) en el grafo acumulado.",
          formula="MATCH (u:User)-[]->(r:Repo) RETURN r, count(DISTINCT u) ORDER BY 2 DESC LIMIT 1",
-         reading="Proyecto que concentra comunidad; un grado anómalo puede delatar actividad automatizada."),
+         tex=r"r^{*} \;=\; \arg\max_{r} \; \deg(r), \qquad \deg(r) = \left|\{\, u : (u) \rightarrow (r) \,\}\right|",
+         symbols="<i>deg(r)</i>: usuarios distintos con al menos una relación (Push, PR, issue, estrella o fork) hacia el "
+                 "repositorio <i>r</i>, contados en el grafo acumulado de todas las fechas cargadas.",
+         reading="Proyecto que concentra comunidad. Un grado anómalo, o un vecindario dominado por estrellas o cuentas "
+                 "automatizadas, puede delatar actividad artificial.",
+         lang="cypher", impl="MATCH (u:User)-[]->(r:Repo)\nRETURN r.name AS repositorio, count(DISTINCT u) AS grado\n"
+                             "ORDER BY grado DESC LIMIT 1"),
 ]
 
 LAYOUT = dict(
@@ -172,6 +208,15 @@ table.def td code { white-space:normal; }
 .cb .tr span { display:block; height:100%; background:var(--data); border-radius:3px; }
 [data-testid="stCode"] code { font-size:.78rem !important; line-height:1.55 !important; }
 .tnote { font-size:.8rem; color:var(--muted); margin-top:6px; line-height:1.45; }
+.kf-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.kf-no { font-size:.72rem; font-weight:700; letter-spacing:.07em; color:#fff; background:var(--db); padding:2px 10px; border-radius:999px; }
+.kf-db { font-size:.8rem; color:var(--muted); display:inline-flex; align-items:center; gap:6px; }
+.kf-title { font-size:1.2rem; font-weight:600; color:var(--ink); margin-top:6px; }
+.kf-q { font-size:.9rem; color:var(--muted); font-style:italic; margin-top:1px; }
+.kf-lbl { font-size:.72rem; font-weight:600; letter-spacing:.07em; text-transform:uppercase; color:var(--brand); margin-top:6px; }
+.kf-txt { font-size:.92rem; color:var(--ink); line-height:1.5; margin-top:2px; }
+.kf-sym { font-size:.82rem; color:var(--ink2); line-height:1.5; }
+.kf-read { font-size:.9rem; color:var(--ink); line-height:1.5; background:var(--panel); border-radius:6px; padding:8px 12px; margin-top:4px; }
 .flow { display:flex; flex-wrap:wrap; align-items:stretch; gap:8px; }
 .flow .st { flex:1 1 140px; border:1px solid var(--hair2); border-top:4px solid var(--c); border-radius:8px; padding:10px 12px; background:#fff; }
 .flow .st .k { font-size:.68rem; font-weight:600; color:var(--muted); letter-spacing:.07em; text-transform:uppercase; }
@@ -196,6 +241,14 @@ def fdate(d: date, weekday: bool = False, year: bool = True) -> str:
 
 def fnum(v: float) -> str:
     return f"{v:,.0f}" if v < 1e5 else f"{v / 1e3:.1f} mil" if v < 1e6 else f"{v / 1e6:.2f} M"
+
+
+def tnum(v: float) -> str:
+    return f"{v:,.0f}".replace(",", "{,}")
+
+
+def tex_escape(text: str) -> str:
+    return re.sub(r"([_&%#$])", r"\\\1", text)
 
 
 def fdt(ts: datetime) -> str:
@@ -307,6 +360,31 @@ def kpi_tile(kd: dict, value: str, ctx: str, value_cls: str = "") -> str:
             f'<div class="tile-value {value_cls}">{value}</div><div class="tile-ctx">{ctx}</div>'
             f'<div class="tile-src"><span><span class="sw" style="background:{color}"></span> {kd["db"]}</span>'
             f'<code>{kd["table"]}</code></div></div>')
+
+
+def kpi_section(kd: dict, sel: date, calc: str | None, calc_note: str, applied: str, chart_title: str, chart):
+    color = DB_COLOR[kd["db"]]
+    impl = kd["impl"].replace("{d1}", str(sel - timedelta(days=1))).replace("{dn}", str(sel + timedelta(days=1)))
+    with st.container(border=True):
+        st.html(f'<div class="kf-head" style="--db:{color}"><span class="kf-no">KPI {kd["no"]}</span>'
+                f'<span class="kf-db"><span class="sw" style="background:{color}"></span>{kd["db"]} · <code>{kd["table"]}</code></span></div>'
+                f'<div class="kf-title">{kd["long"]}</div><div class="kf-q">{kd["question"]}</div>')
+        a, b = st.columns([5, 6], gap="large")
+        with a:
+            st.html(f'<div class="kf-lbl">Definición</div><div class="kf-txt">{kd["definition"]}</div>'
+                    '<div class="kf-lbl">Fórmula de cálculo</div>')
+            st.latex(kd["tex"])
+            st.html(f'<div class="kf-sym">{kd["symbols"]}</div><div class="kf-lbl">Interpretación</div>'
+                    f'<div class="kf-txt">{kd["reading"]}</div>')
+            with st.expander(f"Implementación en {kd['db']}"):
+                st.code(impl.replace("{d}", str(sel)).replace("{y}", str(sel.year)), language=kd["lang"])
+        with b:
+            st.html(f'<div class="kf-lbl">Cálculo para el {fdate(sel, weekday=True)}</div>')
+            if calc:
+                st.latex(calc)
+            st.html((f'<div class="kf-sym">{calc_note}</div>' if calc_note else "")
+                    + f'<div class="kf-read"><b>Lectura.</b> {applied}</div><div class="kf-lbl">{chart_title}</div>')
+            chart()
 
 
 def hbar(labels, values, colors, text, hover, customdata=None, height=None) -> go.Figure:
@@ -749,7 +827,8 @@ def klabel(name: str) -> str:
 
 section(f"Indicadores clave · {fdate(sel, weekday=True)}",
         "Calculados automáticamente por la etapa 6 del DAG y guardados en Cassandra (<code>kpis_by_date</code>). "
-        "El color superior de cada tarjeta indica la base de datos de origen; al pasar el cursor se muestra su definición y fórmula.")
+        "El color superior de cada tarjeta indica la base de datos de origen. La pestaña «Indicadores (KPI)» detalla la "
+        "definición, la fórmula de cálculo y la interpretación de cada uno.")
 K = {kd["key"]: kd for kd in KPI_DEF}
 day_row = dd.set_index("event_date").loc[sel]
 tiles = []
@@ -804,8 +883,108 @@ if not krow.empty:
 st.html(f'<div class="tiles-foot">{foot}</div>')
 
 # ------------------------------------------------------------------ pestañas por base de datos
-tab_c, tab_g, tab_m, tab_doc = st.tabs(["Actividad temporal · Cassandra", "Red de colaboración · Neo4j",
-                                        "Documentos fuente · MongoDB", "Metodología y calidad de datos"])
+tab_k, tab_c, tab_g, tab_m, tab_doc = st.tabs(["Indicadores (KPI)", "Actividad temporal · Cassandra", "Red de colaboración · Neo4j",
+                                               "Documentos fuente · MongoDB", "Metodología y calidad de datos"])
+kpiv = {name: dict(zip(g["event_date"], g["kpi_value"].where(g["kpi_value"].notna(), None))) for name, g in kp.groupby("kpi_name")}
+full_days = dd[dd["n_hours"] >= 24]
+n_h = len(hrs)
+
+with tab_k:
+    st.html('<p class="tab-lead">Cinco indicadores, al menos uno por base de datos, calculados cada hora por la etapa 6 del DAG '
+            "(<code>generate_kpis</code>) y guardados en Cassandra (<code>kpis_by_date</code>). Cada ficha presenta la definición, "
+            "la fórmula de cálculo y la interpretación del indicador, y aplica la fórmula a la fecha de análisis.</p>")
+
+    if ev is None:
+        calc, applied = None, "El indicador aún no se calculó para esta fecha."
+    else:
+        calc = rf"E_D = {tnum(ev)}\ \text{{eventos}} \qquad ({n_h}\ \text{{h cargadas}};\ \approx {tnum(ev / n_h)}\ \text{{por hora}})"
+        if n_h == 24 and len(full_days) > 1:
+            mean = full_days["total_events"].mean()
+            dev = (ev / mean - 1) * 100
+            applied = (f"Se procesaron {ev:,.0f} eventos, {f'{dev:+.0f}'.replace('-', '−')} % respecto de la media "
+                       f"de los {len(full_days)} días completos ({mean:,.0f}).")
+            if abs(dev) >= 50:
+                applied += " Una diferencia de esta magnitud refleja sobre todo cambios de volumen del feed de GH Archive entre periodos."
+        elif n_h < 24 and len(full_days):
+            applied = (f"Día parcial: {ev / n_h:,.0f} eventos por hora cargada frente a {(full_days['total_events'] / 24).mean():,.0f} "
+                       f"por hora en los días completos. El total crecerá cuando se carguen las {24 - n_h} horas faltantes.")
+        else:
+            applied = f"Se procesaron {ev:,.0f} eventos en {n_h} horas."
+    kpi_section(K["events_per_day"], sel, calc, "", applied, "Evolución en el periodo",
+                lambda: show(fig_trend(dd, dict(zip(dd["event_date"], dd["total_events"])), sel, "Eventos por día", ",.0f"), 230, "k1"))
+
+    if g_live is None:
+        calc, note, applied = None, "", f"No se calcula: no hay datos del {fdate(prev, weekday=True)}."
+    else:
+        hsum = hourly[hourly["event_date"].isin([sel, prev])].groupby(["event_date", "event_hour"])["event_count"].sum()
+        a = int(sum(hsum.get((sel, h), 0) for h in common))
+        b = int(sum(hsum.get((prev, h), 0) for h in common))
+        calc = rf"G_D = \frac{{{tnum(a)} - {tnum(b)}}}{{{tnum(b)}}} \times 100 = {g_live:+.1f}\,\%"
+        note = f"<i>H</i>: {len(common)} horas presentes en ambos días ({hours_label(common)})."
+        applied = (f"La actividad {'creció' if g_live >= 0 else 'cayó'} un {abs(g_live):.1f} % frente al {fdate(prev, weekday=True)} "
+                   f"en las mismas {len(common)} horas.")
+        if abs(g_live) >= 50:
+            applied += " Una variación de esta magnitud suele reflejar cambios de cobertura del feed (ver horas atípicas en el Gráfico 1)."
+        if g_stored is None or abs(g_stored - g_live) > 0.05:
+            applied += " El valor guardado en <code>kpis_by_date</code> está desactualizado; se muestra el recalculado."
+    kpi_section(K["daily_growth_pct"], sel, calc, note, applied, "Evolución en el periodo",
+                lambda: show(fig_growth(dd, growth, sel), 230, "k2"))
+
+    ua = user_activity(sel)
+    if v3 is None:
+        calc, applied = None, "El indicador aún no se calculó para esta fecha."
+    else:
+        calc = rf"A_D = \frac{{{tnum(ev or 0)}}}{{{tnum(users_n)}}} = {v3:.2f}\ \text{{eventos por usuario}}"
+        applied = f"Cada usuario activo generó en promedio {v3:.2f} eventos."
+        if ua:
+            applied += (f" La mediana es {ua['median']:.0f}: el 1 % de cuentas más activas concentra el "
+                        f"{ua['top1_events'] / ua['total'] * 100:.1f} % de los eventos y las cuentas automatizadas ([bot]), el "
+                        f"{ua['bot_events'] / ua['total'] * 100:.1f} %.")
+        if n_h < 24:
+            applied += " En un día parcial el promedio es menor porque cada usuario tuvo menos horas para generar eventos."
+    v3s = {d: v for d, v in kpiv.get("avg_events_per_user", {}).items() if v is not None}
+    kpi_section(K["avg_events_per_user"], sel, calc, "", applied, "Evolución en el periodo",
+                lambda: show(fig_trend(dd, v3s, sel, "Eventos / usuario", ".2f"), 230, "k3"))
+
+    v4s = {d: v for d, v in kpiv.get("pr_merge_rate_pct", {}).items() if v is not None}
+    if v4 is None:
+        calc, applied = None, "El indicador aún no se calculó para esta fecha."
+    else:
+        calc = None
+        applied = f"De cada 100 pull requests cerrados, {v4:.0f} se fusionaron."
+        if m:
+            F, N = int(m.group(1)), int(m.group(2))
+            calc = rf"T_D = \frac{{{tnum(F)}}}{{{tnum(F)} + {tnum(N)}}} \times 100 = {v4:.1f}\,\%"
+        if len(v4s) > 1:
+            lo, hi = min(v4s.values()), max(v4s.values())
+            applied += (f" En el periodo la tasa va de {lo:.1f} % a {hi:.1f} % (media {sum(v4s.values()) / len(v4s):.1f} %): "
+                        f"{'un comportamiento estable' if hi - lo < 5 else 'una variación apreciable'} entre días.")
+    kpi_section(K["pr_merge_rate_pct"], sel, calc, "", applied, "Evolución en el periodo",
+                lambda: show(fig_trend(dd, v4s, sel, "Fusionados (%)", ".1f", " %"), 230, "k4"))
+
+    if not (r5 and d5 is not None):
+        calc, note, applied = None, "", "El indicador aún no se calculó para esta fecha."
+    else:
+        calc = rf"r^{{*}} = \texttt{{{tex_escape(r5)}}}, \qquad \deg(r^{{*}}) = {tnum(d5)}"
+        note = f"Valor guardado al calcularse el indicador ({fdt(c5)}); el grafo crece con cada carga."
+        applied = f"<b>{esc(r5)}</b> reunía {d5:,.0f} usuarios distintos al calcularse el indicador."
+        try:
+            eg5 = ego(r5)
+            applied += (f" Hoy el grafo le asigna {eg5['deg']:,} usuarios, de los cuales {eg5['bots']:,} son cuentas automatizadas. "
+                        "Su vecindario se explora en la pestaña «Red de colaboración» (Gráfico 6).")
+        except Exception:
+            pass
+
+    def chart5():
+        try:
+            g5 = graph_top(5)
+        except Exception as exc:
+            st.info(f"No se pudo consultar Neo4j: {exc}")
+            return
+        show(hbar(g5["repo"].tolist(), g5["usuarios"].tolist(), [DB_COLOR["Neo4j"] if r == r5 else OTHER for r in g5["repo"]],
+                  [f"{v:,}" for v in g5["usuarios"]], "<b>%{y}</b><br>%{x:,} usuarios distintos<extra></extra>"),
+             34 * len(g5) + 24, "k5")
+    kpi_section(K["top_repo_connections"], sel, calc, note, applied, "Ranking actual del grafo (consulta en vivo)", chart5)
 
 with tab_c:
     st.html('<p class="tab-lead">Agregados que Cassandra sirve leyendo <b>una sola partición por consulta</b> (diseño orientado a '
@@ -839,7 +1018,6 @@ with tab_c:
             "cargadas; los fines de semana van sombreados.")
     fig_head("Gráfico 3", "Eventos procesados por día", f"{fdate(first_d)} – {fdate(last_d)}")
     show(fig_daily(dd, sel), 360, "g3")
-    full_days = dd[dd["n_hours"] >= 24]
     if len(full_days):
         lo, hi = full_days.loc[full_days["total_events"].idxmin()], full_days.loc[full_days["total_events"].idxmax()]
         reading = (f"Días completos: promedio de {full_days['total_events'].mean():,.0f} eventos por día; mínimo el "
@@ -848,35 +1026,6 @@ with tab_c:
     else:
         reading = "Aún no hay días completos: todas las barras corresponden a días parciales."
     fig_note(reading, "Cassandra · <code>daily_totals</code> (totales) y <code>events_by_hour</code> (horas cargadas).")
-
-    section("Evolución de los indicadores", "Valor diario de los KPI 2, 3 y 4. La línea vertical marca la fecha de análisis; "
-            "los marcadores huecos son días parciales y la línea se corta donde no hay datos.")
-    c1, c2, c3 = st.columns(3, gap="large")
-    kpiv = {name: dict(zip(g["event_date"], g["kpi_value"].where(g["kpi_value"].notna(), None)))
-            for name, g in kp.groupby("kpi_name")}
-    with c1:
-        fig_head("Gráfico 4", "Crecimiento diario (KPI 2)", "variación vs. el día anterior, mismas horas")
-        show(fig_growth(dd, growth, sel), 250, "g4")
-        gvals = {d: g for d, (g, _) in growth.items() if g is not None}
-        if gvals:
-            dmax = max(gvals, key=lambda d: abs(gvals[d]))
-            fig_note(f"Azul: crece; rojo: cae. Mayor variación: {gvals[dmax]:+.1f} % el {fdate(dmax)}. Los saltos extremos suelen "
-                     "coincidir con horas de volumen atípico en el feed.", "Cassandra · <code>events_by_hour</code>.")
-    with c2:
-        fig_head("Gráfico 5", "Eventos por usuario (KPI 3)", "promedio diario por usuario activo")
-        v3s = {d: v for d, v in kpiv.get("avg_events_per_user", {}).items() if v is not None}
-        show(fig_trend(dd, v3s, sel, "Eventos / usuario", ".2f"), 250, "g5")
-        full_v3 = [v for d, v in v3s.items() if len(cov.get(d, ())) == 24]
-        if full_v3:
-            fig_note(f"Media de días completos: {sum(full_v3) / len(full_v3):.2f}. En días parciales el promedio baja porque cada "
-                     "usuario tuvo menos horas para generar eventos.", "Cassandra · <code>kpis_by_date</code>.")
-    with c3:
-        fig_head("Gráfico 6", "Tasa de fusión de PR (KPI 4)", "porcentaje de PR cerrados que se fusionaron")
-        v4s = {d: v for d, v in kpiv.get("pr_merge_rate_pct", {}).items() if v is not None}
-        show(fig_trend(dd, v4s, sel, "Fusionados (%)", ".1f", " %"), 250, "g6")
-        if v4s:
-            fig_note(f"Rango del periodo: {min(v4s.values()):.1f} %–{max(v4s.values()):.1f} %. Es una proporción, por lo que es "
-                     "comparable aun en días parciales.", "MongoDB (<code>payload.action</code>) vía <code>kpis_by_date</code>.")
 
     section("Repositorios y usuarios más activos", "Rankings de actividad. El periodo y el criterio de orden solo afectan a la Tabla 1.")
     o1, o2, _ = st.columns([2.4, 2, 4])
@@ -925,7 +1074,7 @@ with tab_c:
 SELECT event_hour, event_type, event_count FROM events_by_hour WHERE event_date = '{sel}';
 -- Gráfico 3: totales diarios (partición por año, ordenada por fecha DESC)
 SELECT event_date, total_events, unique_users, unique_repos FROM daily_totals WHERE year = {sel.year};
--- Indicadores y Gráficos 4-6: KPIs calculados por Airflow
+-- Indicadores (tarjetas y fichas KPI): calculados por Airflow
 SELECT kpi_name, kpi_value, kpi_label, computed_at FROM kpis_by_date WHERE event_date = '{sel}';
 -- Tabla 1: actividad por repositorio (una partición por día del periodo)
 SELECT repo_name, pull_requests, issues, stars, forks, pushes, total_events FROM repo_activity_by_day WHERE event_date = '{sel}';
@@ -952,7 +1101,7 @@ with tab_g:
                 + stat("Pertenencias", f"{rels.get('BELONGS_TO', 0):,}", "relaciones repositorio → organización") + "</div>")
         a, b = st.columns([2, 3], gap="large")
         with a:
-            fig_head("Gráfico 7", "Interacciones por tipo de relación", "porcentaje y número de relaciones")
+            fig_head("Gráfico 4", "Interacciones por tipo de relación", "porcentaje y número de relaciones")
             rt = sorted(((t, rels.get(t, 0)) for t in REL_ES), key=lambda x: -x[1])
             show(hbar([REL_ES[t] for t, _ in rt], [v for _, v in rt], [REL_COLOR[t] for t, _ in rt],
                       [f"{v / inter * 100:.1f} %  ·  {fnum(v)}" if inter else "0" for _, v in rt],
@@ -965,8 +1114,8 @@ with tab_g:
             if gt.empty:
                 st.info("El grafo aún no tiene relaciones.")
             else:
-                repo = st.selectbox("Repositorio a explorar (Gráficos 8 y 9)", gt["repo"].tolist())
-                fig_head("Gráfico 8", f"Top {top_n} repositorios por usuarios conectados", "grado del nodo: usuarios distintos con al menos una relación")
+                repo = st.selectbox("Repositorio a explorar (Gráficos 5 y 6)", gt["repo"].tolist())
+                fig_head("Gráfico 5", f"Top {top_n} repositorios por usuarios conectados", "grado del nodo: usuarios distintos con al menos una relación")
                 show(hbar(gt["repo"].tolist(), gt["usuarios"].tolist(),
                           [DB_COLOR["Neo4j"] if r == repo else OTHER for r in gt["repo"]], [f"{v:,}" for v in gt["usuarios"]],
                           "<b>%{y}</b><br>%{x:,} usuarios distintos · %{customdata:,} interacciones<extra></extra>",
@@ -982,7 +1131,7 @@ with tab_g:
             if eg["users"]:
                 e1, e2 = st.columns([3, 2], gap="large")
                 with e1:
-                    fig_head("Gráfico 9", f"Vecindario de {esc(repo)}",
+                    fig_head("Gráfico 6", f"Vecindario de {esc(repo)}",
                              f"{len(eg['users'])} de {eg['deg']:,} usuarios conectados (los de más interacciones); sector = relación dominante")
                     show(fig_ego(repo, eg), 520, "g9")
                     org = f" Pertenece a la organización <b>{esc(eg['org'])}</b>." if eg.get("org") else ""
@@ -1002,13 +1151,13 @@ with tab_g:
                             + '<div class="tnote">Primera y última actividad: propiedades <code>first_seen</code> y '
                               "<code>last_seen</code> de las relaciones.</div>")
         with st.expander("Consultas Cypher de esta pestaña"):
-            st.code("""// Gráfico 7: relaciones por tipo (Neo4j responde desde su count store)
+            st.code("""// Gráfico 4: relaciones por tipo (Neo4j responde desde su count store)
 MATCH ()-[r:PUSHED]->() RETURN count(r)          // una consulta por tipo de relación
-// Gráfico 8 y KPI 5: grado (usuarios distintos) por repositorio
+// Gráfico 5 y KPI 5: grado (usuarios distintos) por repositorio
 MATCH (u:User)-[r]->(repo:Repo)
 RETURN repo.name, count(DISTINCT u) AS usuarios, sum(r.count) AS interacciones
 ORDER BY usuarios DESC LIMIT %d
-// Gráfico 9 y Tabla 3: vecindario del repositorio
+// Gráfico 6 y Tabla 3: vecindario del repositorio
 MATCH (u:User)-[r]->(:Repo {name: '%s'})
 RETURN u.login, type(r), r.count, r.first_seen, r.last_seen ORDER BY r.count DESC""" % (top_n, repo if not gt.empty else ""),
                     language="cypher")
@@ -1035,7 +1184,7 @@ with tab_m:
         a, b = st.columns([3, 2], gap="large")
         acts = md["actions"]
         with a:
-            fig_head("Gráfico 10", "Ciclo de vida de los pull requests", f"eventos PullRequestEvent del {fdate(sel, weekday=True)} por <code>payload.action</code>")
+            fig_head("Gráfico 7", "Ciclo de vida de los pull requests", f"eventos PullRequestEvent del {fdate(sel, weekday=True)} por <code>payload.action</code>")
             if acts:
                 ordered = sorted(acts.items(), key=lambda x: -x[1])
                 show(hbar([PR_ACTION_ES.get(k, k) for k, _ in ordered], [v for _, v in ordered],
@@ -1070,13 +1219,6 @@ with tab_m:
                 st.json(md["sample"], expanded=True)
 
 with tab_doc:
-    section("Definición de los indicadores", "Cada KPI tiene definición, fórmula e interpretación; las cinco bases de cálculo cubren las tres bases de datos.")
-    kdf = pd.DataFrame([{**kd, "no": f"KPI {kd['no']}", "db_html": f'<span class="sw" style="background:{DB_COLOR[kd["db"]]}"></span> {kd["db"]}',
-                         "formula_html": f"<code>{esc(kd['formula'])}</code>"} for kd in KPI_DEF])
-    st.html(table_html(kdf, [("no", "N.º", "nw"), ("name", "Indicador", "name"), ("db_html", "Base de datos", "html"),
-                             ("definition", "Definición", "text"), ("formula_html", "Fórmula", "html"),
-                             ("reading", "Interpretación", "text")], cls="t def"))
-
     section("Cobertura y calidad de la carga", "Una fila por día. Las horas provienen de <code>events_by_hour</code>; los conteos, "
             "de la tabla de trazabilidad <code>pipeline_runs</code> que escribe cada corrida del DAG.")
     rn = runs()
