@@ -1,5 +1,5 @@
 // =====================================================================
-//  Neo4j AuraDB: constraints e índices del grafo
+//  Neo4j: constraints e índices del grafo
 //  Ejecutar en Neo4j Browser (console.neo4j.io -> Open) o con:
 //      python scripts/init_neo4j.py
 //

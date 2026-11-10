@@ -6,7 +6,7 @@
 # =====================================================================
 set -euo pipefail
 PROJECT_ID="${1:?Uso: bash gcp/01_crear_vm.sh <PROJECT_ID>}"
-ZONE="us-central1-a"          # misma región que Atlas Free (us-central1) -> latencia mínima
+ZONE="us-central1-a"          # región barata; cualquier otra funciona igual
 VM="bigdata-vm"
 
 gcloud config set project "$PROJECT_ID"
@@ -26,6 +26,8 @@ gcloud compute instances create "$VM" \
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
       echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
       apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+      # En el primer arranque /home suele estar vacío (el usuario SSH se crea después);
+      # gcp/04_setup_en_vm.sh completa este paso.
       usermod -aG docker $(ls /home | head -1) || true
       # Cassandra necesita este límite del kernel
       sysctl -w vm.max_map_count=1048575 && echo "vm.max_map_count=1048575" >> /etc/sysctl.conf
@@ -37,7 +39,7 @@ gcloud compute firewall-rules create allow-dashboard-8501 \
   --source-ranges=0.0.0.0/0 --description="Dashboard Streamlit del proyecto Big Data" || true
 
 echo
-echo "VM creada. IP externa (agregarla al IP Access List de MongoDB Atlas):"
+echo "VM creada. IP externa (el dashboard quedará en http://IP:8501):"
 gcloud compute instances describe "$VM" --zone="$ZONE" --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
 echo
 echo "Conectarse con túneles:  bash gcp/02_tunel_ssh.sh $PROJECT_ID"

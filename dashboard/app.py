@@ -27,13 +27,23 @@ INK, INK2, MUTED, GRID = "#0b0b0b", "#52514e", "#898781", "#e1e0d9"
 LAYOUT = dict(
     template="simple_white",
     font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=INK2, size=13),
-    margin=dict(l=8, r=8, t=36, b=8),
+    margin=dict(l=8, r=16, t=36, b=8),
     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     xaxis=dict(showgrid=False, linecolor="#c3c2b7", tickfont=dict(color=MUTED)),
     yaxis=dict(gridcolor=GRID, showline=False, tickfont=dict(color=MUTED), zeroline=False),
     hoverlabel=dict(bgcolor="#ffffff", font=dict(color=INK)),
-    legend=dict(orientation="h", y=1.12, x=0, font=dict(color=INK2)),
+    legend=dict(orientation="h", y=-0.28, yanchor="top", x=0, font=dict(color=INK2)),
 )
+
+
+def hbar(x, y, color, title, text=None, hover=None, height=None) -> go.Figure:
+    """Barra horizontal con etiquetas fuera; extiende el eje X para que el texto no se recorte."""
+    fig = go.Figure(go.Bar(x=x, y=y, orientation="h", marker=dict(color=color, cornerradius=4),
+                           text=text if text is not None else x, textposition="outside",
+                           cliponaxis=False, hovertemplate=hover or "%{y}: %{x:,}<extra></extra>"))
+    extra = dict(height=height) if height else {}
+    fig.update_layout(**layout(title=title, showlegend=False, xaxis={"range": [0, float(max(x)) * 1.22]}, **extra))
+    return fig
 
 
 def layout(**overrides) -> dict:
@@ -48,7 +58,7 @@ def layout(**overrides) -> dict:
 
 st.set_page_config(page_title="GitHub Events · Multimodelo", page_icon="📊", layout="wide")
 st.title("GitHub Events · Arquitectura multimodelo")
-st.caption("MongoDB Atlas (documentos) · Cassandra (series temporales) · Neo4j AuraDB (grafo) · orquestado con Apache Airflow")
+st.caption("MongoDB (documentos) · Cassandra (series temporales) · Neo4j (grafo) · orquestado con Apache Airflow")
 
 
 # ------------------------------------------------------------------ datos (cache 5 min)
@@ -154,14 +164,19 @@ def tile(col, label, kpi, fmt="{:,.0f}", suffix=""):
     r = kv.get(kpi)
     col.metric(label, (fmt.format(r.kpi_value) + suffix) if r is not None else "—", help=r.kpi_label if r is not None else None)
 
-c = st.columns(6)
+SOURCE_BADGE = {"Cassandra": "⏱ Cassandra", "MongoDB": "📄 MongoDB", "Neo4j": "🕸 Neo4j"}
+c = st.columns(5)
 tile(c[0], "Eventos del día", "events_per_day")
+c[0].caption(SOURCE_BADGE["Cassandra"] + " · `events_by_hour`")
 tile(c[1], "Crecimiento diario", "daily_growth_pct", "{:+.1f}", " %")
+c[1].caption(SOURCE_BADGE["Cassandra"] + " · `events_by_hour`")
 tile(c[2], "Prom. eventos / usuario", "avg_events_per_user", "{:.2f}")
-tile(c[3], "Participación de pushes", "push_share_pct", "{:.1f}", " %")
-tile(c[4], "Hora pico (UTC)", "peak_hour", "{:02.0f}", ":00")
+c[2].caption(SOURCE_BADGE["Cassandra"] + " · `daily_totals`")
+tile(c[3], "Tasa de fusión de PRs", "pr_merge_rate_pct", "{:.1f}", " %")
+c[3].caption(SOURCE_BADGE["MongoDB"] + " · `events.payload.action`")
 r = kv.get("top_repo_connections")
-c[5].metric("Repo más conectado", (r.kpi_label if r is not None else "—"), help=f"{r.kpi_value:.0f} usuarios distintos" if r is not None else None)
+c[4].metric("Repo más conectado", f"{r.kpi_value:.0f} usuarios" if r is not None else "—", help="Usuarios distintos conectados al repo (grado en Neo4j)")
+c[4].caption(SOURCE_BADGE["Neo4j"] + (f" · `{r.kpi_label}`" if r is not None else ""))
 if kv:
     st.caption(f"KPIs calculados por Airflow a las {list(kv.values())[0].computed_at:%H:%M} UTC · fuente: Cassandra `kpis_by_date`")
 
@@ -172,22 +187,20 @@ with tab_c:
     left, right = st.columns([3, 2])
     ebh = events_by_hour(sel_date)
     if not ebh.empty:
-        main_types = ["PushEvent", "CreateEvent", "PullRequestEvent", "WatchEvent", "IssueCommentEvent", "IssuesEvent", "ForkEvent"]
+        main_types = ["PullRequestEvent", "IssuesEvent", "IssueCommentEvent", "PullRequestReviewEvent", "WatchEvent", "ReleaseEvent", "ForkEvent", "PushEvent"]
         ebh["serie"] = ebh["event_type"].where(ebh["event_type"].isin(main_types), "Other")
         pivot = ebh.groupby(["event_hour", "serie"], as_index=False)["event_count"].sum()
         order = [t for t in main_types if t in set(pivot["serie"])] + (["Other"] if "Other" in set(pivot["serie"]) else [])
         fig = px.area(pivot, x="event_hour", y="event_count", color="serie", category_orders={"serie": order},
                       color_discrete_sequence=SERIES, title="Eventos por hora y tipo")
         fig.update_traces(line=dict(width=1.5), hovertemplate="%{y:,} eventos<extra>%{fullData.name}</extra>")
-        fig.update_layout(**layout(hovermode="x unified", xaxis={"title": "Hora (UTC)"}, yaxis={"title": None}))
-        left.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(**layout(hovermode="x unified", xaxis={"title": "Hora (UTC)"}, yaxis={"title": None}, legend_title_text=""))
+        left.plotly_chart(fig, width="stretch")
 
         share = ebh.groupby("serie", as_index=False)["event_count"].sum().sort_values("event_count")
-        fig2 = go.Figure(go.Bar(x=share["event_count"], y=share["serie"], orientation="h",
-                                marker=dict(color=SERIES[0], cornerradius=4), text=share["event_count"].map("{:,}".format),
-                                textposition="outside", hovertemplate="%{y}: %{x:,}<extra></extra>"))
-        fig2.update_layout(**layout(title="Distribución por tipo de evento", showlegend=False))
-        right.plotly_chart(fig2, use_container_width=True)
+        fig2 = hbar(share["event_count"], share["serie"], SERIES[0], "Distribución por tipo de evento",
+                    text=share["event_count"].map("{:,}".format))
+        right.plotly_chart(fig2, width="stretch")
 
     dt = daily_totals()
     if len(dt) > 1:
@@ -195,12 +208,12 @@ with tab_c:
         fig3.add_trace(go.Scatter(x=dt["event_date"], y=dt["total_events"], mode="lines+markers", name="Eventos",
                                   line=dict(color=SERIES[0], width=2), marker=dict(size=8)))
         fig3.update_layout(**layout(title="Tendencia diaria de eventos procesados", hovermode="x unified", showlegend=False))
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width="stretch")
 
     tr = top_repos(sel_date, top_n)
     if not tr.empty:
         st.markdown(f"**Top {top_n} repositorios del día** (tabla `repo_activity_by_day`)")
-        st.dataframe(tr.set_index("repo_name"), use_container_width=True)
+        st.dataframe(tr.set_index("repo_name"), width="stretch")
 
 with tab_g:
     gs = graph_stats()
@@ -210,16 +223,13 @@ with tab_g:
     g3.metric("Relaciones", f"{gs['rels']:,}")
     tc = graph_top_connected(top_n)
     if not tc.empty:
-        fig = go.Figure(go.Bar(x=tc["usuarios"], y=tc["repo"], orientation="h",
-                               marker=dict(color=SERIES[6], cornerradius=4), text=tc["usuarios"], textposition="outside",
-                               hovertemplate="%{y}<br>%{x} usuarios distintos<extra></extra>"))
-        fig.update_layout(**layout(title="Repositorios con más usuarios conectados (grado del nodo)",
-                                   yaxis={"autorange": "reversed"}, showlegend=False,
-                                   height=max(320, 32 * len(tc) + 80)))
-        st.plotly_chart(fig, use_container_width=True)
+        fig = hbar(tc["usuarios"], tc["repo"], SERIES[6], "Repositorios con más usuarios conectados (grado del nodo)",
+                   hover="%{y}<br>%{x} usuarios distintos<extra></extra>", height=max(320, 32 * len(tc) + 80))
+        fig.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig, width="stretch")
         repo = st.selectbox("Explorar vecinos de", tc["repo"].tolist())
         nb = graph_neighbors(repo)
-        st.dataframe(nb, use_container_width=True, hide_index=True)
+        st.dataframe(nb, width="stretch", hide_index=True)
         st.code(f"MATCH (u:User)-[r]->(repo:Repo {{name:'{repo}'}})\nRETURN u.login, type(r), r.count ORDER BY r.count DESC", language="cypher")
 
 with tab_m:
@@ -228,27 +238,24 @@ with tab_m:
     m1.metric("Documentos en `events`", f"{total:,}")
     if not by_type.empty:
         by_type = by_type.head(8).sort_values("n")
-        fig = go.Figure(go.Bar(x=by_type["n"], y=by_type["tipo"], orientation="h",
-                               marker=dict(color=SERIES[2], cornerradius=4), text=by_type["n"].map("{:,}".format), textposition="outside",
-                               hovertemplate="%{y}: %{x:,}<extra></extra>"))
-        fig.update_layout(**layout(title="Documentos por tipo (aggregate $group)", showlegend=False))
-        m2.plotly_chart(fig, use_container_width=True)
+        fig = hbar(by_type["n"], by_type["tipo"], SERIES[2], "Documentos por tipo (aggregate $group)",
+                   text=by_type["n"].map("{:,}".format))
+        m2.plotly_chart(fig, width="stretch")
     st.markdown("**Últimos eventos ingeridos** (colección `events`)")
-    st.dataframe(recent, use_container_width=True, hide_index=True)
+    st.dataframe(recent, width="stretch", hide_index=True)
     with st.expander("Ver un documento completo"):
         doc = config.mongo_db().events.find_one(sort=[("created_at", -1)])
         st.json(doc, expanded=False)
 
 with tab_doc:
     st.markdown("""
-| KPI | Definición | Fórmula | Interpretación |
-|---|---|---|---|
-| Eventos del día | Registros procesados por el pipeline en el día | `Σ events_by_hour.event_count` | Volumen ingerido; base del resto |
-| Crecimiento diario | Variación porcentual vs. día anterior | `(E(d) − E(d−1)) / E(d−1) × 100` | >0: la actividad crece |
-| Repo más conectado | Repositorio con más usuarios distintos (grado) | `MATCH (u)-[]->(r) RETURN r, count(DISTINCT u)` | Proyecto que concentra comunidad |
-| Prom. eventos/usuario | Intensidad de actividad | `E(d) / usuarios_únicos(d)` | Valores altos: usuarios muy activos o bots |
-| Participación de pushes | Proporción de actividad de código | `pushes(d) / E(d) × 100` | Código real vs. actividad social |
-| Hora pico | Hora con más eventos | `argmax_h Σ event_count` | Ventana de mayor carga |
+| KPI | BD fuente | Definición | Fórmula | Interpretación |
+|---|---|---|---|---|
+| Eventos del día | Cassandra | Registros procesados por el pipeline en el día | `Σ events_by_hour.event_count` | Volumen ingerido; base del resto |
+| Crecimiento diario | Cassandra | Variación porcentual vs. las mismas horas del día anterior | `(E(d) − E(d−1)) / E(d−1) × 100` | >0: la actividad crece |
+| Prom. eventos/usuario | Cassandra | Intensidad de actividad | `E(d) / daily_totals.unique_users(d)` | Valores altos: usuarios muy activos o bots |
+| Tasa de fusión de PRs | MongoDB | Porcentaje de pull requests resueltos que fueron aceptados | `merged(d) / (merged(d) + closed(d)) × 100` sobre `payload.action` | Salud del flujo de contribución; solo existe en el documento original |
+| Repo más conectado | Neo4j | Repositorio con más usuarios distintos (grado del nodo) | `MATCH (u)-[]->(r) RETURN r, count(DISTINCT u)` | Proyecto que concentra comunidad (o actividad automatizada si es anómalo) |
 
-**Flujo:** GH Archive (JSON/hora) → Airflow: extracción → limpieza → **MongoDB** (documento original) → **Cassandra** (agregados por hora/día) → **Neo4j** (Usuario→Repo) → KPIs.
+**Flujo por capas:** GH Archive (JSON/hora) → Airflow: extracción → limpieza → **MongoDB** (capa de documentos originales) → **Cassandra** lee MongoDB y escribe agregados por hora/día + `user_repo_interactions_by_hour` → **Neo4j** lee esa tabla de Cassandra y construye (Usuario)→(Repo)→(Org) → KPIs leen las tres BDs y se guardan en `kpis_by_date`.
 """)

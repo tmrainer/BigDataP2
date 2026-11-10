@@ -1,8 +1,8 @@
 """Etapa 1 - EXTRACCIÓN
 Descarga el archivo horario de GH Archive (https://www.gharchive.org/):
     https://data.gharchive.org/YYYY-MM-DD-H.json.gz   (H sin cero a la izquierda: 0..23)
-Cada archivo contiene todos los eventos públicos de GitHub de esa hora (100k-300k
-líneas JSON). Esto es la "actualización incremental": cada corrida del DAG
+Cada archivo contiene todos los eventos públicos de GitHub de esa hora (~4k líneas
+JSON en 2026; 100k+ hasta 2025). Esto es la "actualización incremental": cada corrida del DAG
 procesa UNA hora nueva.
 """
 from __future__ import annotations

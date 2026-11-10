@@ -1,7 +1,7 @@
 FROM quay.io/jupyter/minimal-notebook:python-3.11
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt plotly pandas matplotlib
+RUN pip install --no-cache-dir -r /tmp/requirements.txt plotly==6.9.0 pandas==2.3.3 matplotlib==3.10.9
 
 WORKDIR /home/jovyan/work
 # El token se toma de la variable de entorno JUPYTER_TOKEN (definida en docker-compose).

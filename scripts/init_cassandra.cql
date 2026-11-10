@@ -1,5 +1,5 @@
 -- =====================================================================
---  Cassandra: keyspace y tablas orientadas a CONSULTA (query-first design)
+--  Cassandra: keyspace y 7 tablas orientadas a CONSULTA (query-first design)
 --  Ejecutar:  docker exec -i cassandra cqlsh < scripts/init_cassandra.cql
 --
 --  Justificación: Cassandra se usa para series temporales y agregados
@@ -43,7 +43,22 @@ CREATE TABLE IF NOT EXISTS user_activity_by_day (
     PRIMARY KEY ((event_date), actor_login)
 );
 
--- Q4: Totales diarios (para KPI de crecimiento día a día)
+-- Q4: ¿Qué hizo cada usuario sobre cada repositorio en una hora dada?
+--     Partición por (día, hora). Es la FUENTE de la etapa 5: Neo4j construye sus aristas
+--     (User)-[TIPO {count}]->(Repo) leyendo esta tabla, no el archivo ni MongoDB.
+CREATE TABLE IF NOT EXISTS user_repo_interactions_by_hour (
+    event_date   date,
+    event_hour   int,
+    actor_login  text,
+    repo_name    text,
+    event_type   text,
+    event_count  int,
+    org_login    text,
+    first_seen   timestamp,
+    PRIMARY KEY ((event_date, event_hour), actor_login, repo_name, event_type)
+);
+
+-- Q5: Totales diarios (para KPI de crecimiento día a día)
 CREATE TABLE IF NOT EXISTS daily_totals (
     year         int,
     event_date   date,
@@ -53,7 +68,7 @@ CREATE TABLE IF NOT EXISTS daily_totals (
     PRIMARY KEY ((year), event_date)
 ) WITH CLUSTERING ORDER BY (event_date DESC);
 
--- Q5: KPIs calculados por el DAG (etapa 6), leídos por el dashboard
+-- Q6: KPIs calculados por el DAG (etapa 6), leídos por el dashboard
 CREATE TABLE IF NOT EXISTS kpis_by_date (
     event_date   date,
     kpi_name     text,

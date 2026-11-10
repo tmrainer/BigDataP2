@@ -1,7 +1,10 @@
 .env
 data/raw/*.gz
 data/processed/*
+!data/processed/.gitkeep
 logs/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+graphify-out/cache/
+graphify-out/.graphify_*

@@ -1,6 +1,6 @@
 """
 DAG: github_events_pipeline
-Pipeline multimodelo (MongoDB Atlas + Cassandra + Neo4j AuraDB) sobre GitHub Events.
+Pipeline multimodelo (MongoDB + Cassandra + Neo4j) sobre GitHub Events.
 
 Etapas (requisito del proyecto):
   1. extract_data          -> descarga el archivo horario de GH Archive
@@ -69,7 +69,7 @@ def _kpis(ti, **_):
 # ---------------------------------------------------------------- DAG
 with DAG(
     dag_id="github_events_pipeline",
-    description="ETL horario GH Archive -> MongoDB Atlas / Cassandra / Neo4j AuraDB + KPIs",
+    description="ETL horario GH Archive -> MongoDB / Cassandra / Neo4j + KPIs",
     start_date=pendulum.datetime(2026, 11, 1, tz="UTC"),
     schedule="@hourly",
     catchup=False,

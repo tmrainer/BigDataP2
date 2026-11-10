@@ -21,11 +21,23 @@ CASSANDRA_KEYSPACE = os.environ.get("CASSANDRA_KEYSPACE", "github_metrics")
 
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password")
+NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "bigdata2026")
 NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
 
 MAX_EVENTS_PER_RUN = int(os.environ.get("MAX_EVENTS_PER_RUN", "60000"))
 GHARCHIVE_LAG_HOURS = int(os.environ.get("GHARCHIVE_LAG_HOURS", "2"))
+
+# --- Control de crecimiento (opcional). Con las 3 BDs en Docker local no hay límites de tier,
+# por eso los defaults son 0 (sin borrado). Se dejan configurables por si se usa un tier gratuito
+# en la nube (Atlas M0 = 512 MB, AuraDB Free = 200k nodos).
+# Retención en MongoDB medida en TIEMPO DE EVENTO: tras cargar una hora se borran los documentos
+# con created_at anterior a (hora - MONGO_RETENTION_HOURS). 0 = nunca.
+MONGO_RETENTION_HOURS = int(os.environ.get("MONGO_RETENTION_HOURS", "0"))
+# Poda del grafo: usuarios sin actividad en las últimas N horas (y repos/orgs huérfanos). 0 = nunca.
+NEO4J_RETENTION_HOURS = int(os.environ.get("NEO4J_RETENTION_HOURS", "0"))
+# Repos / usuarios más activos de cada lote que entran al grafo (acota nodos nuevos por hora)
+NEO4J_TOP_REPOS = int(os.environ.get("NEO4J_TOP_REPOS", "10000"))
+NEO4J_TOP_USERS = int(os.environ.get("NEO4J_TOP_USERS", "20000"))
 
 # Tipos de evento que generan relaciones en el grafo
 RELATION_BY_TYPE = {
@@ -39,7 +51,7 @@ RELATION_BY_TYPE = {
 
 def mongo_client():
     from pymongo import MongoClient
-    return MongoClient(MONGO_URI, serverSelectionTimeoutMS=20000)
+    return MongoClient(MONGO_URI, serverSelectionTimeoutMS=20000, tz_aware=True)
 
 
 def mongo_db():

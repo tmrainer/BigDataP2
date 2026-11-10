@@ -1,18 +1,24 @@
-"""Etapa 3 - CARGA EN MONGODB (Atlas)
+"""Etapa 3 - CARGA EN MONGODB
 Inserta los documentos limpios en la colección `events`. Idempotente: usa el id
 del evento de GitHub como _id y upserts en lote (bulk_write), así re-ejecutar
 una hora no duplica datos.
+
+Retención opcional (MONGO_RETENTION_HOURS > 0): después de cargar, se eliminan los documentos
+cuyo created_at sea anterior a (hora del lote - MONGO_RETENTION_HOURS). Se mide
+en tiempo de evento, no en reloj, así que con la VM apagada no se pierde nada.
+El histórico agregado queda en Cassandra; MongoDB conserva la ventana reciente
+de documentos originales.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 
-from config import mongo_db
+from config import mongo_db, MONGO_RETENTION_HOURS
 
 log = logging.getLogger(__name__)
 BATCH = 2000
@@ -34,10 +40,22 @@ def upsert_events(events: list[dict]) -> dict:
     return {"inserted": inserted, "already_present": matched}
 
 
+def purge_old_events(reference_hour: datetime, retention_hours: int = MONGO_RETENTION_HOURS) -> int:
+    """Borra documentos con created_at < reference_hour - retention_hours. Devuelve cuántos."""
+    if retention_hours <= 0:
+        return 0
+    cutoff = reference_hour - timedelta(hours=retention_hours)
+    res = mongo_db().events.delete_many({"created_at": {"$lt": cutoff}})
+    if res.deleted_count:
+        log.info("Retención Mongo: %d documentos anteriores a %s eliminados", res.deleted_count, cutoff.isoformat())
+    return res.deleted_count
+
+
 def load_mongo(clean_meta: dict) -> dict:
     from clean import read_processed
     events = read_processed(Path(clean_meta["processed_path"]))
     result = upsert_events(events)
+    result["purged"] = purge_old_events(datetime.fromisoformat(clean_meta["hour"]))
     db = mongo_db()
     db.ingestion_log.update_one(
         {"source_file": clean_meta["source_file"]},

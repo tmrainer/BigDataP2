@@ -11,7 +11,7 @@ ACTION="${2:-status}"
 case "$ACTION" in
   stop)   gcloud compute instances stop  bigdata-vm --project "$PROJECT_ID" --zone us-central1-a ;;
   start)  gcloud compute instances start bigdata-vm --project "$PROJECT_ID" --zone us-central1-a
-          echo "Nueva IP externa (si cambió, actualizar en Atlas):"
+          echo "IP externa actual (dashboard en http://IP:8501):"
           gcloud compute instances describe bigdata-vm --project "$PROJECT_ID" --zone us-central1-a --format='get(networkInterfaces[0].accessConfigs[0].natIP)' ;;
   status) gcloud compute instances list --project "$PROJECT_ID" ;;
   delete) echo "Esto borra la VM y su disco (al terminar el curso)."; read -p "¿Seguro? (si/no) " ok

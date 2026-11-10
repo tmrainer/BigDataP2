@@ -1,4 +1,4 @@
-"""Crea colecciones, validador de esquema e índices en MongoDB Atlas.
+"""Crea colecciones, validador de esquema e índices en MongoDB.
 Uso: docker compose exec jupyter python scripts/init_mongo.py
 
 Justificación: MongoDB guarda el evento ORIGINAL (semiestructurado). El campo

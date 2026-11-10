@@ -3,7 +3,7 @@ Reglas:
   * Campos obligatorios: id, type, actor.login, repo.name, created_at.
   * created_at debe parsear a datetime (ISO-8601 'Z').
   * Deduplicación por id dentro del lote.
-  * Se recorta `payload` a lo relevante por tipo de evento (Atlas Free = 0.5 GB).
+  * Se recorta `payload` a lo relevante por tipo de evento (menos espacio, mismos KPIs).
   * Se limita a MAX_EVENTS_PER_RUN eventos por corrida.
 Salida: archivo JSONL en data/processed/ + estadísticas de calidad.
 """
