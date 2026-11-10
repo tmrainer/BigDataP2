@@ -70,7 +70,7 @@ KPI_DEF = [
          long="Crecimiento diario de eventos", question="¿La actividad sube o baja respecto del día anterior?",
          definition="Variación porcentual del volumen respecto del día anterior, sobre las horas cargadas en ambos días.",
          formula="(E_D(H) − E_D−1(H)) / E_D−1(H) × 100,  H = horas presentes en D y D−1",
-         tex=r"G_D \;=\; \frac{E_D(H) - E_{D-1}(H)}{E_{D-1}(H)} \times 100, \qquad H = H_D \cap H_{D-1}",
+         tex=r"\begin{gathered} G_D \;=\; \frac{E_D(H) - E_{D-1}(H)}{E_{D-1}(H)} \times 100 \\[2pt] H = H_D \cap H_{D-1} \end{gathered}",
          symbols="<i>E<sub>D</sub>(H)</i>: eventos del día <i>D</i> sumando solo las horas de <i>H</i>, el conjunto de horas "
                  "cargadas en ambos días. Sin datos del día anterior el indicador no se calcula (N/D).",
          reading="G &gt; 0: la actividad crece; G &lt; 0: disminuye. Variaciones muy grandes suelen reflejar cambios de "
@@ -104,7 +104,7 @@ KPI_DEF = [
          long="Repositorio con mayor número de conexiones", question="¿Qué proyecto concentra más comunidad?",
          definition="Repositorio con más usuarios distintos conectados (grado del nodo) en el grafo acumulado.",
          formula="MATCH (u:User)-[]->(r:Repo) RETURN r, count(DISTINCT u) ORDER BY 2 DESC LIMIT 1",
-         tex=r"r^{*} \;=\; \arg\max_{r} \; \deg(r), \qquad \deg(r) = \left|\{\, u : (u) \rightarrow (r) \,\}\right|",
+         tex=r"\begin{gathered} r^{*} \;=\; \arg\max_{r} \; \deg(r) \\[2pt] \deg(r) = \left|\{\, u : (u) \rightarrow (r) \,\}\right| \end{gathered}",
          symbols="<i>deg(r)</i>: usuarios distintos con al menos una relación (Push, PR, issue, estrella o fork) hacia el "
                  "repositorio <i>r</i>, contados en el grafo acumulado de todas las fechas cargadas.",
          reading="Proyecto que concentra comunidad. Un grado anómalo, o un vecindario dominado por estrellas o cuentas "
@@ -136,9 +136,13 @@ CSS = """
 html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] * { font-family:'IBM Plex Sans', Inter, 'Segoe UI', system-ui, sans-serif; }
 [data-testid="stIconMaterial"] { font-family:'Material Symbols Rounded' !important; }
 code, pre, pre *, [data-testid="stCode"] * { font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace !important; }
+.katex { font-family:KaTeX_Main, 'Times New Roman', serif; }
+.katex * { font-family:inherit; }
+.katex-display { padding:.4em 0 .3em; overflow:visible !important; }
+[data-testid="stMarkdownContainer"]:has(> .katex-display) { overflow:visible !important; }
 [data-testid="stAppDeployButton"] { display:none; }
 [data-testid="stAppViewContainer"] { color:var(--ink); }
-.block-container { padding-top:2.4rem; padding-bottom:3rem; max-width:1480px; }
+.block-container { padding-top:4.5rem; padding-bottom:3rem; max-width:1480px; }
 [data-testid="stWidgetLabel"] p { font-size:.78rem !important; font-weight:600; color:var(--ink2); text-transform:uppercase; letter-spacing:.05em; }
 [data-testid="stTab"] p { font-size:1rem !important; font-weight:600 !important; color:var(--ink2); }
 [data-testid="stTab"][aria-selected="true"] p { color:var(--brand); }
@@ -897,7 +901,8 @@ with tab_k:
     if ev is None:
         calc, applied = None, "El indicador aún no se calculó para esta fecha."
     else:
-        calc = rf"E_D = {tnum(ev)}\ \text{{eventos}} \qquad ({n_h}\ \text{{h cargadas}};\ \approx {tnum(ev / n_h)}\ \text{{por hora}})"
+        calc = (rf"\begin{{gathered}} E_D = {tnum(ev)}\ \text{{eventos}} \\[2pt] {n_h}\ \text{{h cargadas}} \;\Rightarrow\; "
+                rf"\approx {tnum(ev / n_h)}\ \text{{eventos por hora}} \end{{gathered}}")
         if n_h == 24 and len(full_days) > 1:
             mean = full_days["total_events"].mean()
             dev = (ev / mean - 1) * 100
