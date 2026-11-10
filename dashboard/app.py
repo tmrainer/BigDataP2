@@ -95,12 +95,43 @@ def daily_totals(days: int = 14) -> pd.DataFrame:
     return df
 
 
+REPO_COLS = ["pushes", "stars", "forks", "issues", "pull_requests", "total_events"]
+REPO_ES = {"repo_name": "repositorio", "pushes": "pushes", "stars": "estrellas", "forks": "forks", "issues": "issues",
+           "pull_requests": "pull requests", "total_events": "eventos", "usuarios": "usuarios distintos"}
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def top_repos(d: date, n: int = 10) -> pd.DataFrame:
+def repo_activity(dates: tuple[date, ...]) -> pd.DataFrame:
+    """Actividad por repo sumada sobre las fechas dadas (una partición de repo_activity_by_day por día)."""
     s = config.cassandra_session()
-    rows = s.execute("SELECT repo_name, pushes, stars, forks, issues, pull_requests, total_events FROM repo_activity_by_day WHERE event_date=%s", (d,))
-    df = pd.DataFrame([r._asdict() for r in rows])
-    return df.nlargest(n, "total_events") if not df.empty else df
+    frames = []
+    for d in dates:
+        rows = s.execute("SELECT repo_name, pushes, stars, forks, issues, pull_requests, total_events FROM repo_activity_by_day WHERE event_date=%s", (d,))
+        frames.append(pd.DataFrame([r._asdict() for r in rows]))
+    df = pd.concat([f for f in frames if not f.empty], ignore_index=True) if frames else pd.DataFrame()
+    if df.empty:
+        return df
+    return df.fillna(0).groupby("repo_name", as_index=False)[REPO_COLS].sum()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def distinct_users_for(repos: tuple[str, ...]) -> dict:
+    """Usuarios distintos conectados a cada repo (grado del nodo en Neo4j)."""
+    with config.neo4j_driver() as drv:
+        recs = drv.execute_query(
+            "MATCH (u:User)-[]->(r:Repo) WHERE r.name IN $repos RETURN r.name AS repo, count(DISTINCT u) AS usuarios",
+            repos=list(repos), database_=config.NEO4J_DATABASE).records
+    return {rec["repo"]: rec["usuarios"] for rec in recs}
+
+
+def top_repos(dates: tuple[date, ...], n: int, order_by: str) -> pd.DataFrame:
+    df = repo_activity(dates)
+    if df.empty:
+        return df
+    df = df.nlargest(n, order_by)
+    df["usuarios"] = df["repo_name"].map(distinct_users_for(tuple(df["repo_name"]))).fillna(0).astype(int)
+    df = df[["repo_name", "usuarios"] + [c for c in REPO_COLS if df[c].sum() > 0]]   # oculta columnas en cero (p. ej. pushes)
+    return df.rename(columns=REPO_ES).set_index("repositorio")
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -175,8 +206,10 @@ c[2].caption(SOURCE_BADGE["Cassandra"] + " · `daily_totals`")
 tile(c[3], "Tasa de fusión de PRs", "pr_merge_rate_pct", "{:.1f}", " %")
 c[3].caption(SOURCE_BADGE["MongoDB"] + " · `events.payload.action`")
 r = kv.get("top_repo_connections")
-c[4].metric("Repo más conectado", f"{r.kpi_value:.0f} usuarios" if r is not None else "—", help="Usuarios distintos conectados al repo (grado en Neo4j)")
-c[4].caption(SOURCE_BADGE["Neo4j"] + (f" · `{r.kpi_label}`" if r is not None else ""))
+_name = r.kpi_label if r is not None else "—"
+c[4].metric("Repo más conectado", _name if len(_name) <= 22 else _name[:21] + "…",
+            help=(f"{_name}: " if r is not None else "") + "repositorio con más usuarios distintos conectados (grado del nodo en Neo4j)")
+c[4].caption(SOURCE_BADGE["Neo4j"] + (f" · **{r.kpi_value:.0f} usuarios distintos**" if r is not None else ""))
 if kv:
     st.caption(f"KPIs calculados por Airflow a las {list(kv.values())[0].computed_at:%H:%M} UTC · fuente: Cassandra `kpis_by_date`")
 
@@ -210,10 +243,17 @@ with tab_c:
         fig3.update_layout(**layout(title="Tendencia diaria de eventos procesados", hovermode="x unified", showlegend=False))
         st.plotly_chart(fig3, width="stretch")
 
-    tr = top_repos(sel_date, top_n)
+    o1, o2, _ = st.columns([2, 2, 6])
+    period = o1.radio("Periodo", ["Día seleccionado", f"Todo el periodo cargado ({len(dates)} días)"], horizontal=True)
+    order_opts = {"eventos": "total_events", "estrellas": "stars", "forks": "forks", "pull requests": "pull_requests", "issues": "issues"}
+    order_lbl = o2.selectbox("Ordenar por", list(order_opts))
+    sel_dates = (sel_date,) if period.startswith("Día") else tuple(dates)
+    tr = top_repos(sel_dates, top_n, order_opts[order_lbl])
     if not tr.empty:
-        st.markdown(f"**Top {top_n} repositorios del día** (tabla `repo_activity_by_day`)")
-        st.dataframe(tr.set_index("repo_name"), width="stretch")
+        scope = f"del {sel_date:%d %b %Y}" if len(sel_dates) == 1 else f"acumulados del {min(dates):%d %b} al {max(dates):%d %b %Y}"
+        st.markdown(f"**Top {top_n} repositorios por {order_lbl}, {scope}** · eventos: Cassandra `repo_activity_by_day` · usuarios distintos: Neo4j")
+        st.dataframe(tr, width="stretch")
+        st.caption("GH Archive registra eventos (alguien dio una estrella hoy), no estados (el repo tiene N estrellas): las cifras son actividad en el periodo, no totales históricos del repositorio.")
 
 with tab_g:
     gs = graph_stats()
