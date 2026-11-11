@@ -1,0 +1,129 @@
+% ========================= KPIs IMPLEMENTADOS ========================
+\section{KPIs Implementados}
+\label{sec:kpis}
+
+Se definieron cinco indicadores, con la condición de que \textbf{cada base de datos aporte al menos uno}: tres se calculan desde Cassandra, uno desde MongoDB y uno desde Neo4j. La etapa 6 del DAG (\repo{src/kpis.py}{src/kpis.py}) los recalcula en cada corrida para el día de la hora procesada y los guarda en la tabla \texttt{kpis\_by\_date}, de donde los lee el \textit{dashboard}.
+
+\begin{table}[H]
+\centering
+\caption{Resumen de los cinco indicadores y su valor para el lunes 12 de octubre de 2026}
+\label{tab:kpis}
+\vspace{0.2cm}
+\footnotesize
+\begin{tabular}{@{}clllr@{}}
+\toprule
+\textbf{KPI} & \textbf{Indicador} & \textbf{Base de datos} & \textbf{Fuente} & \textbf{Valor (12 oct)} \\
+\midrule
+1 & Eventos procesados por día       & Cassandra & \texttt{events\_by\_hour}          & 1,981,972 \\
+2 & Crecimiento diario de eventos    & Cassandra & \texttt{events\_by\_hour}          & $+17.9$\,\% \\
+3 & Actividad por usuario & Cassandra & \texttt{daily\_totals}            & 4.07 \\
+4 & Tasa de fusión de PR & MongoDB & \texttt{payload.action}       & 93.8\,\% \\
+5 & Repositorio más conectado        & Neo4j     & grado de \texttt{:Repo}       & 6,720 usuarios \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los valores de ejemplo corresponden al 12 de octubre, un día con las 24 horas cargadas y con el flujo de referencias de Git completo. Para cada indicador se presenta su definición, su fórmula de cálculo y su interpretación, como exige el enunciado, seguidas de la ficha correspondiente del \textit{dashboard}.
+
+% ------------------------------------------------------------------ KPI 1
+\subsection{KPI 1: Número de Eventos Procesados por Día}
+
+\paragraph{Definición.} Cantidad de eventos públicos de GitHub procesados por el \textit{pipeline} en el día $D$ (UTC).
+
+\paragraph{Fórmula.}
+\[
+E_D \;=\; \sum_{h \,\in\, H_D} \; \sum_{t} \; n_{D,h,t}
+\]
+donde $n_{D,h,t}$ es el número de eventos del tipo $t$ en la hora $h$ del día $D$ (una fila de \texttt{events\_by\_hour}) y $H_D$ es el conjunto de horas cargadas de ese día.
+
+\paragraph{Interpretación.} Mide el volumen de actividad ingerido y es la base de los demás indicadores. Solo es comparable entre días con las mismas horas cargadas y, como se mostró en la Sección~\ref{subsec:cobertura}, entre días con la misma cobertura de la fuente.
+
+\paragraph{Valor.} $E_D = 1{,}981{,}972$ eventos el 12 de octubre, un 154\,\% por encima de la media de los 40 días completos (778,986).
+
+\captura{dash-kpi1.png}{Ficha del KPI 1 en el \textit{dashboard}: definición, fórmula, cálculo para la fecha, lectura y evolución en el periodo.}
+
+% ------------------------------------------------------------------ KPI 2
+\subsection{KPI 2: Crecimiento Diario de Eventos}
+
+\paragraph{Definición.} Variación porcentual del volumen de eventos respecto al día anterior, calculada sobre las horas cargadas en ambos días.
+
+\paragraph{Fórmula.}
+\[
+G_D \;=\; \frac{E_D(H) - E_{D-1}(H)}{E_{D-1}(H)} \times 100,
+\qquad H \;=\; H_D \cap H_{D-1}
+\]
+donde $E_D(H)$ son los eventos del día $D$ sumando únicamente las horas de $H$. Si no hay datos del día anterior, el indicador no se calcula.
+
+\paragraph{Interpretación.} $G_D > 0$ indica que la actividad crece y $G_D < 0$ que disminuye. Variaciones de gran magnitud reflejan cambios de cobertura de la fuente antes que cambios reales de actividad.
+
+\paragraph{Valor.} $G_D = (1{,}981{,}972 - 1{,}680{,}871) / 1{,}680{,}871 \times 100 = +17.9$\,\% frente al domingo 11 de octubre, sobre las mismas 24 horas.
+
+\paragraph{Decisión de diseño.} La primera versión comparaba totales diarios. Durante la carga, un día a medio procesar aparecía con variaciones ficticias de más de 100 puntos, y el primer día del periodo mostraba un engañoso 0\,\%. Restringir la comparación a las horas comunes y dejar el valor nulo cuando no hay día previo eliminó ambos artefactos: un día en curso con 2 horas cargadas se compara contra las mismas 2 horas del día anterior.
+
+\captura{dash-kpi2.png}{Ficha del KPI 2. Las barras de mayor magnitud coinciden con los días en que el flujo de referencias de Git aparece o desaparece de la fuente.}
+
+% ------------------------------------------------------------------ KPI 3
+\subsection{KPI 3: Promedio de Actividad por Usuario}
+
+\paragraph{Definición.} Promedio de eventos generados por cada usuario activo (actor distinto) en el día.
+
+\paragraph{Fórmula.}
+\[
+A_D \;=\; \frac{E_D}{U_D}
+\]
+donde $U_D$ es el número de usuarios distintos del día (\texttt{daily\_totals.unique\_users}).
+
+\paragraph{Interpretación.} Mide la intensidad de uso. Como la distribución de actividad es muy asimétrica, describe la intensidad agregada y no al usuario típico.
+
+\paragraph{Valor.} $A_D = 1{,}981{,}972 / 486{,}477 = 4.07$ eventos por usuario. La cifra convive con una mediana de 1 evento por usuario: el 1\,\% de las cuentas más activas concentra el 43.4\,\% de los eventos del día, y las 4,019 cuentas automatizadas (sufijo \texttt{[bot]}) generan el 21.7\,\%. Una sola de ellas, \texttt{github-actions[bot]}, aporta 309,389 eventos, el 15.6\,\% del total.
+
+\captura{dash-kpi3.png}{Ficha del KPI 3.}
+
+% ------------------------------------------------------------------ KPI 4
+\subsection{KPI 4: Tasa de Fusión de \textit{Pull Requests}}
+
+\paragraph{Definición.} Porcentaje de los \textit{pull requests} cerrados en el día que fueron fusionados (aceptados).
+
+\paragraph{Fórmula.}
+\[
+T_D \;=\; \frac{F_D}{F_D + N_D} \times 100
+\]
+donde $F_D$ es el número de eventos \texttt{PullRequestEvent} del día con \texttt{payload.action = "merged"} y $N_D$ el de aquellos con \texttt{payload.action = "closed"} (cerrados sin fusionar).
+
+\paragraph{Interpretación.} Indica qué proporción del trabajo que se somete a revisión termina aceptada; es una medida de la salud del flujo de contribución.
+
+\paragraph{Valor.} $T_D = 8{,}314 / (8{,}314 + 545) \times 100 = 93.8$\,\%. En todo el periodo se mantiene entre 88.8\,\% y 94.7\,\%, con media de 93.3\,\%.
+
+\paragraph{Por qué MongoDB.} Es el único indicador que requiere un campo del \texttt{payload}. Cassandra solo conserva conteos por tipo de evento y no distingue un \textit{pull request} abierto de uno fusionado. La agregación se apoya en el índice \texttt{ix\_type\_date}:
+
+\begin{lstlisting}[style=plano]
+db.events.aggregate([
+  { $match: { type: "PullRequestEvent",
+              created_at: { $gte: ISODate("2026-10-12T00:00:00Z"),
+                            $lt:  ISODate("2026-10-13T00:00:00Z") } } },
+  { $group: { _id: "$payload.action", n: { $sum: 1 } } }
+])
+\end{lstlisting}
+
+\captura{dash-kpi4.png}{Ficha del KPI 4. Es el indicador más estable del periodo porque depende del flujo de colaboración, cuya cobertura no varía.}
+
+% ------------------------------------------------------------------ KPI 5
+\subsection{KPI 5: Repositorio con Mayor Número de Conexiones}
+
+\paragraph{Definición.} Repositorio con más usuarios distintos conectados en el grafo acumulado, es decir, el nodo \texttt{Repo} de mayor grado de entrada.
+
+\paragraph{Fórmula.}
+\[
+r^{*} \;=\; \arg\max_{r} \; \deg(r),
+\qquad
+\deg(r) \;=\; \bigl|\{\, u : (u) \rightarrow (r) \,\}\bigr|
+\]
+donde $\deg(r)$ cuenta los usuarios distintos con al menos una relación (\textit{push}, \textit{pull request}, \textit{issue}, estrella o \textit{fork}) hacia el repositorio $r$.
+
+\paragraph{Interpretación.} Señala el proyecto que más comunidad concentra. Un grado anómalo, o un vecindario dominado por un solo tipo de relación, puede indicar popularidad puntual o actividad artificial en lugar de colaboración.
+
+\paragraph{Valor.} $r^{*} = \texttt{morluto/rea}$, con $\deg(r^{*}) = 6{,}720$ usuarios. Como se analizó en la Sección~\ref{sec:neo4j}, el 82\,\% de esas conexiones son únicamente estrellas.
+
+\paragraph{Limitación.} A diferencia de los otros cuatro, este indicador no depende de la fecha: el grafo es acumulado y la consulta recorre todas las relaciones, por lo que su valor es el mismo para cualquier día consultado. Una versión por fecha exigiría filtrar las relaciones por \texttt{first\_seen}, propiedad que el modelo ya almacena.
+
+\captura{dash-kpi5.png}{Ficha del KPI 5, con el ranking actual del grafo consultado en vivo.}

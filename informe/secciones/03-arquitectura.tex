@@ -1,0 +1,111 @@
+% ======================== ARQUITECTURA PROPUESTA =====================
+\section{Arquitectura Propuesta}
+\label{sec:arquitectura}
+
+\subsection{Visión General}
+
+La arquitectura es \textbf{por capas}: cada base de datos se alimenta de la anterior y no del archivo de origen. MongoDB recibe el evento limpio; Cassandra construye sus agregados \textit{leyendo MongoDB}; Neo4j construye su grafo \textit{leyendo Cassandra}; y la etapa de indicadores consulta las tres. De este modo MongoDB actúa como única fuente de la verdad y las otras dos bases son vistas derivadas y reconstruibles.
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        font=\small,
+        box/.style={rectangle, draw=black, thick, minimum width=2.7cm, minimum height=1.15cm, align=center},
+        db/.style={cylinder, draw=black, thick, aspect=0.25, shape border rotate=90, minimum width=2.6cm, minimum height=1.9cm, align=center},
+        arrow/.style={-{Stealth[scale=1.1]}, thick},
+        lbl/.style={font=\scriptsize, align=center}
+    ]
+    \node[box, fill=gray!12] (src) {\textbf{GH Archive}\\ \texttt{.json.gz} por hora};
+    \node[box, fill=green!10, right=1.5cm of src] (etl) {\textbf{Etapas 1--2}\\ Extracción\\ y limpieza};
+    \node[db, fill=green!18, right=1.5cm of etl] (mongo) {\textbf{MongoDB}\\ documento\\ original};
+    \node[db, fill=blue!14, below=1.5cm of mongo] (cass) {\textbf{Cassandra}\\ agregados\\ y KPI};
+    \node[db, fill=violet!16, left=1.5cm of cass] (neo) {\textbf{Neo4j}\\ grafo de\\ relaciones};
+    \node[box, fill=orange!14, left=1.5cm of neo] (kpi) {\textbf{Etapa 6}\\ Indicadores};
+    \node[box, fill=yellow!18, below=1.9cm of neo, minimum width=5.2cm] (dash) {\textbf{Dashboard Streamlit}\\ consulta las tres bases};
+
+    \draw[arrow] (src) -- node[lbl, above] {descarga} (etl);
+    \draw[arrow] (etl) -- node[lbl, above] {etapa 3} (mongo);
+    \draw[arrow] (mongo) -- node[lbl, right] {etapa 4} (cass);
+    \draw[arrow] (cass) -- node[lbl, above] {etapa 5} (neo);
+    \draw[arrow] (neo) -- (kpi);
+    \draw[arrow, dashed] (kpi.south) |- node[lbl, pos=0.75, below] {\texttt{kpis\_by\_date}} ($(cass.south)+(0,-0.45)$) -- (cass.south);
+    \draw[arrow, gray] (neo.south) -- (dash.north);
+    \draw[arrow, gray] (cass.south west) -- (dash.north east);
+    \draw[arrow, gray] (mongo.east) -- ++(0.9,0) |- (dash.east);
+
+    \begin{scope}[on background layer]
+        \node[draw=black!50, dashed, rounded corners, fit=(etl)(mongo)(cass)(neo)(kpi), inner xsep=0.45cm, inner ysep=0.7cm, label={[font=\scriptsize, anchor=south west]north west:DAG de Apache Airflow (cada hora)}] {};
+    \end{scope}
+    \end{tikzpicture}
+    \caption{Arquitectura por capas. Las flechas negras son escrituras del DAG; las grises, lecturas del \textit{dashboard}. La etapa 6 lee las tres bases y guarda los indicadores en Cassandra.}
+    \label{fig:arquitectura}
+\end{figure}
+
+\subsection{Justificación Técnica por Base de Datos}
+\label{subsec:justificacion}
+
+El enunciado exige justificar por qué cada tipo de dato se almacena en una base determinada. La Tabla~\ref{tab:justificacion} resume la decisión y los párrafos siguientes la sustentan con las características del dato y de las consultas.
+
+\begin{table}[H]
+\centering
+\caption{Qué almacena cada base de datos y por qué}
+\label{tab:justificacion}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}p{2.1cm}p{4.3cm}p{8.3cm}@{}}
+\toprule
+\textbf{Base} & \textbf{Qué almacena} & \textbf{Por qué} \\
+\midrule
+MongoDB &
+Documento JSON de cada evento (\texttt{actor}, \texttt{repo}, \texttt{org}, \texttt{payload}, \texttt{created\_at}). &
+El \texttt{payload} tiene una forma distinta para cada uno de los 16 tipos de evento observados. Un esquema flexible lo acepta sin migraciones y permite agregar sobre campos anidados como \texttt{payload.action}. \\
+\addlinespace
+Cassandra &
+Conteos por hora y tipo, actividad diaria por repositorio y por usuario, totales diarios, interacciones usuario--repositorio por hora e indicadores por fecha. &
+Son datos \textit{append-only} indexados por tiempo. Con el día como clave de partición, cada gráfico del tablero se resuelve leyendo una sola partición, sin \textit{joins} ni agregaciones en lectura. \\
+\addlinespace
+Neo4j &
+Nodos \texttt{User}, \texttt{Repo} y \texttt{Org}, y relaciones tipadas entre ellos con conteo y fechas de primera y última actividad. &
+El grado de un repositorio, su vecindario o los colaboradores a dos saltos se obtienen recorriendo relaciones. En un modelo tabular requerirían auto-\textit{joins} sobre millones de filas. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{MongoDB: el dato tal como llega.} Un \texttt{PushEvent} trae la referencia de la rama; un \texttt{PullRequestEvent} trae el número, el título y la acción; un \texttt{WatchEvent} casi nada. Forzar esa variedad en columnas fijas obligaría a decenas de columnas mayormente nulas o a una tabla por tipo. El modelo documental conserva cada evento íntegro y es la única capa donde sobrevive el \texttt{payload}; por eso el indicador de tasa de fusión de \textit{pull requests} (KPI~4) solo puede calcularse aquí.
+
+\paragraph{Cassandra: la respuesta precalculada.} El tablero formula siempre las mismas preguntas (eventos por hora de un día, ranking de repositorios de un día, serie diaria). Cassandra invierte el diseño habitual: primero se define la consulta y luego la tabla que la responde. El costo de escritura es bajo y predecible, y la lectura no depende del volumen total almacenado sino del tamaño de una partición.
+
+\paragraph{Neo4j: la relación como dato de primera clase.} Las 2.5 millones de relaciones usuario--repositorio del periodo se almacenan como aristas físicas. Preguntar por los usuarios distintos conectados a un repositorio es contar las aristas entrantes de un nodo, no escanear una tabla de hechos.
+
+\subsection{Componentes y Despliegue}
+
+Todo el sistema se ejecuta en contenedores Docker definidos en un único archivo \repo{docker-compose.yml}{docker-compose.yml}. Las tres bases de datos corren localmente junto al orquestador, sin depender de servicios administrados externos; esta decisión evita los límites de los niveles gratuitos en la nube (512~MB en MongoDB Atlas, 200,000 nodos en Neo4j AuraDB), que el volumen del proyecto supera ampliamente.
+
+\begin{table}[H]
+\centering
+\caption{Servicios del \textit{stack} (\texttt{docker-compose.yml})}
+\label{tab:servicios}
+\vspace{0.2cm}
+\footnotesize
+\begin{tabular}{@{}lllp{5.5cm}@{}}
+\toprule
+\textbf{Servicio} & \textbf{Imagen} & \textbf{Puerto} & \textbf{Función} \\
+\midrule
+\texttt{mongo}             & \texttt{mongo:7}           & 27017 & Documentos originales. Límite 1.5~GB, caché WiredTiger 0.5~GB. \\
+\texttt{cassandra}         & \texttt{cassandra:4.1}     & 9042  & Agregados e indicadores. Límite 3~GB, \textit{heap} 2~GB. \\
+\texttt{neo4j}             & \texttt{neo4j:5}           & 7474, 7687 & Grafo. Límite 2.5~GB, \textit{heap} 1~GB, \textit{page cache} 512~MB. \\
+\texttt{airflow-scheduler} & Airflow 2.10.5 (Python 3.11) & --  & Planifica y ejecuta el DAG (\texttt{LocalExecutor}). \\
+\texttt{airflow-webserver} & Airflow 2.10.5             & 8080  & Interfaz web de Airflow. \\
+\texttt{postgres}          & \texttt{postgres:15}       & --    & Metadatos de Airflow. \\
+\texttt{jupyter}           & imagen propia              & 8888  & \textit{Notebooks} de CRUD y scripts de carga histórica. \\
+\texttt{dashboard}         & Streamlit 1.66             & 8501  & Tablero analítico. \\
+\texttt{mongo-express}     & \texttt{mongo-express:1.0.2} & 8081 & Explorador web de MongoDB. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Los nueve contenedores consumen en conjunto alrededor de 4.9~GB de memoria en operación (medición con \texttt{docker stats}: Neo4j 1.97~GB, Cassandra 1.43~GB, MongoDB 0.92~GB y el resto por debajo de 0.25~GB cada uno). Los límites de memoria por servicio están fijados de modo que el conjunto quepa en una máquina de 16~GB.
+
+\paragraph{Portabilidad a la nube.} El mismo \texttt{docker-compose.yml} se despliega sin cambios en una máquina virtual. La carpeta \texttt{gcp/} del repositorio contiene los \textit{scripts} para crear en Google Cloud una instancia \texttt{e2-standard-4} (4~vCPU, 16~GB de RAM, disco de 50~GB), instalar Docker y abrir únicamente el puerto del \textit{dashboard}; los demás servicios escuchan en \texttt{127.0.0.1} y se acceden por túnel SSH. Las cifras de volumen y rendimiento de este informe se midieron en el equipo de desarrollo del grupo.
+
+\paragraph{Configuración.} Todos los parámetros (credenciales, rango de la carga histórica, tope de eventos por hora, retraso respecto a la publicación de la fuente) se leen de variables de entorno en \repo{src/config.py}{src/config.py}, de modo que el DAG, los \textit{notebooks} y el \textit{dashboard} comparten exactamente la misma configuración y las mismas funciones de conexión.

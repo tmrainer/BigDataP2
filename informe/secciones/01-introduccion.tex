@@ -1,0 +1,68 @@
+% ============================ INTRODUCCIÓN ===========================
+\section{Introducción}
+
+El presente proyecto implementa una arquitectura de datos \textit{multimodelo} que ingiere, de forma automática y cada hora, los eventos públicos de GitHub y los distribuye en tres bases de datos NoSQL según la naturaleza de cada dato: \textbf{MongoDB} conserva el documento original de cada evento, \textbf{Cassandra} almacena las series temporales y los agregados que alimentan los indicadores, y \textbf{Neo4j} modela las relaciones entre usuarios, repositorios y organizaciones. El flujo completo está orquestado por un DAG de \textbf{Apache Airflow} de seis etapas y se consume desde un \textit{dashboard} analítico en Streamlit conectado a las tres bases.
+
+La fuente es GH Archive, un archivo público que publica un fichero JSON comprimido por cada hora de actividad de GitHub. Al cierre de este informe (11 de noviembre de 2026, 03:00 UTC) el sistema había procesado \textbf{985 archivos horarios}, del 1 de octubre al 11 de noviembre de 2026, que suman \textbf{31,244,224 eventos} válidos: 625 veces el mínimo de 50,000 registros exigido por el enunciado.
+
+El trabajo se estructura siguiendo los entregables solicitados:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Problema y arquitectura:} qué preguntas se busca responder y por qué cada tipo de dato reside en una base distinta (Secciones~\ref{sec:problema} y~\ref{sec:arquitectura}).
+    \item \textbf{Dataset:} origen, estructura, volumen, mecanismo de actualización incremental y calidad de los datos (Sección~\ref{sec:dataset}).
+    \item \textbf{Modelos de datos:} colección y validador de MongoDB, siete tablas de Cassandra diseñadas por consulta y grafo de propiedades en Neo4j (Secciones~\ref{sec:mongodb} a~\ref{sec:neo4j}).
+    \item \textbf{Automatización:} DAG de Airflow de seis etapas con ejecución horaria e idempotencia (Sección~\ref{sec:airflow}).
+    \item \textbf{Operaciones CRUD} sobre las tres bases de datos (Sección~\ref{sec:crud}).
+    \item \textbf{Indicadores y \textit{dashboard}:} cinco KPI con definición, fórmula e interpretación, y las capturas del tablero (Secciones~\ref{sec:kpis} y~\ref{sec:dashboard}).
+\end{enumerate}
+
+Al igual que en la primera entrega, el informe no se limita a describir lo construido. Tres hallazgos obtenidos durante la operación del sistema se investigaron hasta su causa y se documentan con evidencia cuantitativa:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{El volumen diario de eventos varía en un factor de 25 sin que la actividad real de GitHub haya cambiado.} Los días completos oscilan entre 81,054 y 2,073,894 eventos. Se revisaron los 985 archivos crudos y se comprobó que la diferencia no proviene de ningún filtro del \textit{pipeline}, sino de la propia fuente: los eventos de tipo \texttt{PushEvent}, \texttt{CreateEvent} y \texttt{DeleteEvent} aparecen y desaparecen en bloque del archivo publicado (Sección~\ref{subsec:cobertura}).
+    \item \textbf{El \textit{pipeline} descarta el 0.002\,\% de los datos.} De 31,244,816 eventos crudos, solo 190 se rechazan por validación y 402 por duplicados; ninguna hora alcanzó el tope de eventos configurado. El conteo de MongoDB coincide exactamente con el de la auditoría independiente sobre los archivos de origen (Sección~\ref{subsec:calidad}).
+    \item \textbf{Una corrida programada falló por un conflicto de permisos entre contenedores,} no por los datos. El diagnóstico a partir de los registros de Airflow llevó a reemplazar la escritura directa del archivo intermedio por una escritura atómica (Sección~\ref{subsec:fallo}).
+\end{itemize}
+
+\subsection*{Disponibilidad del Código}
+
+Todo el código del proyecto (DAG, módulos del \textit{pipeline}, scripts de creación de las bases de datos, \textit{notebooks} de CRUD, \textit{dashboard} y despliegue) está publicado en el siguiente repositorio:
+
+\begin{center}
+\fbox{\parbox{0.9\textwidth}{\centering
+\href{\repourl}{\textbf{\repourl}}\\[0.25em]
+\footnotesize
+\texttt{dags/}~DAG de Airflow \quad
+\texttt{src/}~etapas del \textit{pipeline} \quad
+\texttt{scripts/}~creación de esquemas \quad
+\texttt{notebooks/}~CRUD \quad
+\texttt{dashboard/}~Streamlit \quad
+\texttt{informe/}~fuente \LaTeX{} de este documento}}
+\end{center}
+
+La Tabla~\ref{tab:mapa-repo} relaciona cada requisito del enunciado con el archivo que lo implementa; los nombres de archivo son enlaces directos.
+
+\begin{table}[H]
+\centering
+\caption{Correspondencia entre los requisitos del proyecto y el código del repositorio}
+\label{tab:mapa-repo}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}p{5.6cm}p{9.2cm}@{}}
+\toprule
+\textbf{Requisito} & \textbf{Archivo en el repositorio} \\
+\midrule
+Extracción de datos                 & \repo{src/extract.py}{src/extract.py} \\
+Validación y limpieza               & \repo{src/clean.py}{src/clean.py} \\
+Carga en MongoDB                    & \repo{src/load_mongo.py}{src/load\_mongo.py} \\
+Transformación y carga en Cassandra & \repo{src/load_cassandra.py}{src/load\_cassandra.py} \\
+Relaciones y carga en Neo4j         & \repo{src/load_neo4j.py}{src/load\_neo4j.py} \\
+Generación de indicadores           & \repo{src/kpis.py}{src/kpis.py} \\
+DAG de Airflow                      & \repo{dags/github_events_dag.py}{dags/github\_events\_dag.py} \\
+Creación de las bases de datos      & \repo{scripts/init_mongo.py}{scripts/init\_mongo.py}, \repo{scripts/init_cassandra.cql}{init\_cassandra.cql}, \repo{scripts/init_neo4j.cypher}{init\_neo4j.cypher} \\
+CRUD (MongoDB, Cassandra, Neo4j)    & \repo{notebooks/02_crud_mongodb.ipynb}{notebooks/02\_crud\_mongodb.ipynb}, \repo{notebooks/03_crud_cassandra.ipynb}{03\_crud\_cassandra.ipynb}, \repo{notebooks/04_crud_neo4j.ipynb}{04\_crud\_neo4j.ipynb} \\
+\textit{Dashboard} analítico        & \repo{dashboard/app.py}{dashboard/app.py} \\
+Infraestructura                     & \repo{docker-compose.yml}{docker-compose.yml}, \texttt{gcp/} \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,38 @@
+% ======================= DESCRIPCIÓN DEL PROBLEMA ====================
+\section{Descripción del Problema}
+\label{sec:problema}
+
+GitHub es la mayor plataforma de desarrollo colaborativo de software. Cada acción pública que ocurre en ella (un \textit{push}, la apertura de un \textit{pull request}, un comentario, una estrella) genera un \textbf{evento} en formato JSON. El flujo es continuo, de alto volumen y de estructura heterogénea: todos los eventos comparten una cabecera común (quién, sobre qué repositorio, cuándo), pero el contenido del campo \texttt{payload} cambia por completo según el tipo de evento.
+
+Sobre ese flujo interesa responder tres familias de preguntas, y cada una impone requisitos distintos al almacenamiento:
+
+\begin{table}[H]
+\centering
+\caption{Preguntas de análisis y requisito de almacenamiento que impone cada una}
+\label{tab:preguntas}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}p{4.9cm}p{5.2cm}p{4.6cm}@{}}
+\toprule
+\textbf{Pregunta} & \textbf{Ejemplo} & \textbf{Requisito} \\
+\midrule
+\textquestiondown{}Qué ocurrió exactamente? &
+\textquestiondown{}Qué proporción de los \textit{pull requests} cerrados hoy fue fusionada? &
+Conservar el documento original con su \texttt{payload} variable y consultarlo por campos anidados. \\
+\addlinespace
+\textquestiondown{}Cuánto y cuándo? &
+\textquestiondown{}Cuántos eventos de cada tipo hubo en cada hora del día? \textquestiondown{}Cómo evoluciona el volumen diario? &
+Escrituras masivas y lecturas por rango temporal en tiempo constante. \\
+\addlinespace
+\textquestiondown{}Quién se relaciona con quién? &
+\textquestiondown{}Qué repositorio concentra más usuarios distintos? \textquestiondown{}Quiénes colaboran en los mismos proyectos? &
+Recorrer relaciones sin encadenar \textit{joins}. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Ningún motor resuelve bien los tres casos a la vez. Una base documental responde la primera pregunta, pero recalcular agregados temporales sobre decenas de millones de documentos en cada visita al tablero es costoso. Una base columnar sirve las series temporales en milisegundos, pero obliga a conocer las consultas de antemano y descarta el detalle del evento. Y ninguna de las dos expresa con naturalidad una pregunta de conectividad, que en un modelo tabular equivale a auto-\textit{joins} encadenados.
+
+\paragraph{Objetivo.} Diseñar e implementar un sistema que (i) ingiera de forma programada e incremental los eventos públicos de GitHub; (ii) almacene cada tipo de dato en la base que mejor responde a su patrón de consulta, justificando técnicamente cada decisión; (iii) calcule automáticamente indicadores de actividad; y (iv) los exponga en un tablero que permita analizarlos de manera intuitiva.
+
+\paragraph{Alcance.} El sistema procesa la totalidad de los eventos publicados por GH Archive entre el 1 de octubre y el 11 de noviembre de 2026, y continúa incorporando una hora nueva en cada ejecución del DAG. El análisis describe la actividad \textit{tal como la entrega la fuente}; las limitaciones de cobertura de esa fuente, que resultaron ser significativas, se cuantifican en la Sección~\ref{subsec:cobertura}.

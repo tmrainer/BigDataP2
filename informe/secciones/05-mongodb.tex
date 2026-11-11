@@ -1,0 +1,105 @@
+% ========================= MODELO DE MONGODB =========================
+\section{Modelo de Datos de MongoDB}
+\label{sec:mongodb}
+
+MongoDB es la capa de \textbf{documentos originales}. La base \texttt{github\_events} contiene dos colecciones: \texttt{events}, con un documento por evento, e \texttt{ingestion\_log}, con un documento por archivo horario procesado. El esquema se crea con \repo{scripts/init_mongo.py}{scripts/init\_mongo.py}.
+
+\subsection{Colección \texttt{events}}
+
+Cada documento es el evento limpio descrito en la Sección~\ref{sec:dataset}. Se tomaron tres decisiones de modelado:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{El identificador de GitHub es el \texttt{\_id}.} Reutilizar el \texttt{id} del evento como clave primaria hace que la carga sea idempotente por construcción: reprocesar una hora no puede duplicar documentos.
+    \item \textbf{Documentos embebidos, no referencias.} \texttt{actor}, \texttt{repo} y \texttt{org} se guardan dentro del evento. Un evento es un hecho inmutable y siempre se lee completo; normalizarlo en colecciones separadas obligaría a un \texttt{\$lookup} en cada consulta sin ahorrar espacio relevante.
+    \item \textbf{\texttt{payload} libre.} El validador exige la cabecera y deja el \texttt{payload} sin restricciones de forma, porque es precisamente la parte que cambia con cada tipo de evento.
+\end{itemize}
+
+\bloque{Validador de esquema de la colección (\texttt{\$jsonSchema})}
+\begin{lstlisting}[style=plano]
+required: ["_id", "type", "actor", "repo", "created_at"]
+properties:
+  _id:        string   (id del evento en GitHub)
+  type:       string
+  actor:      object   required: ["login"]
+  repo:       object   required: ["name"]
+  created_at: date
+  payload:    object   (estructura libre, depende de type)
+validationLevel: moderate
+\end{lstlisting}
+
+La Tabla~\ref{tab:payload} muestra qué conserva el \textit{pipeline} del \texttt{payload} de cada tipo. El recorte se decide en la etapa de limpieza y es lo que mantiene el documento medio en 263~bytes.
+
+\begin{table}[H]
+\centering
+\caption{Campos del \texttt{payload} conservados según el tipo de evento}
+\label{tab:payload}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lp{9.4cm}@{}}
+\toprule
+\textbf{Tipo} & \textbf{Campos conservados} \\
+\midrule
+\texttt{PushEvent}         & \texttt{ref}, \texttt{size}, \texttt{distinct\_size}, \texttt{commit\_messages} (hasta 5, 200 caracteres c/u) \\
+\texttt{PullRequestEvent}  & \texttt{action}, \texttt{number}, \texttt{title}, \texttt{merged} \\
+\texttt{IssuesEvent}       & \texttt{action}, \texttt{number}, \texttt{title} \\
+\texttt{IssueCommentEvent} & \texttt{action}, \texttt{issue\_number} \\
+\texttt{CreateEvent}       & \texttt{ref\_type}, \texttt{ref} \\
+\texttt{ForkEvent}         & \texttt{forkee} (nombre completo del repositorio derivado) \\
+Resto de tipos             & \texttt{action}, si existe \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Índices}
+
+Los cuatro índices secundarios responden a consultas concretas del sistema (Tabla~\ref{tab:indices-mongo}).
+
+\begin{table}[H]
+\centering
+\caption{Índices de la colección \texttt{events} y consulta a la que sirven}
+\label{tab:indices-mongo}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}llp{7.2cm}@{}}
+\toprule
+\textbf{Índice} & \textbf{Clave} & \textbf{Uso} \\
+\midrule
+\texttt{ix\_created\_at} & \texttt{created\_at} (desc.)              & Etapa 4: leer los eventos de una hora para agregarlos en Cassandra. \\
+\texttt{ix\_type\_date}  & \texttt{type}, \texttt{created\_at} (desc.) & Etapa 6: contar los \texttt{PullRequestEvent} de un día por acción (KPI~4). \\
+\texttt{ix\_repo}        & \texttt{repo.name}                          & Consultas por repositorio (CRUD, exploración). \\
+\texttt{ix\_actor}       & \texttt{actor.login}                        & Consultas por usuario (CRUD, exploración). \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Colección \texttt{ingestion\_log}}
+
+Registra, por cada archivo de origen, las estadísticas de calidad de la corrida (eventos crudos, válidos, duplicados, rechazados y motivos) y el resultado de la carga. Tiene un índice único sobre \texttt{source\_file} y al corte contiene 985 documentos, uno por hora.
+
+\subsection{Carga}
+
+La etapa 3 (\repo{src/load_mongo.py}{src/load\_mongo.py}) escribe en lotes de 2,000 operaciones con \texttt{bulk\_write} no ordenado. Cada operación es un \textit{upsert} con \texttt{\$setOnInsert}: si el documento ya existe no se modifica. El resultado distingue los documentos insertados de los que ya estaban presentes, lo que permite detectar reprocesos.
+
+\subsection{Tamaño}
+
+\begin{table}[H]
+\centering
+\caption{Dimensiones de la colección \texttt{events} (\texttt{db.events.stats()})}
+\label{tab:mongo-stats}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Documentos                         & 31,244,224 \\
+Tamaño medio del documento         & 263 bytes \\
+Tamaño lógico de los datos         & 8.2 GB \\
+Tamaño en disco (comprimido)       & 3.3 GB \\
+Tamaño de los índices              & 2.6 GB \\
+Volumen Docker total               & 6.1 GB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La compresión de WiredTiger reduce los datos a un 40\,\% de su tamaño lógico. Los cuatro índices secundarios, en cambio, ocupan casi tanto como los datos: es el costo de poder consultar 31 millones de documentos por fecha, tipo, repositorio y usuario sin recorrer la colección.

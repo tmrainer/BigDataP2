@@ -1,0 +1,120 @@
+% ========================== OPERACIONES CRUD =========================
+\section{Operaciones CRUD}
+\label{sec:crud}
+
+Las cuatro operaciones básicas se implementaron sobre cada base de datos en un \textit{notebook} propio, pensado para ejecutarse celda a celda durante la exposición. Los tres siguen el mismo guion: crear un registro de demostración claramente identificable, consultarlo, modificarlo, eliminarlo y comprobar que ya no existe, de manera que la demostración no altera los datos reales.
+
+\begin{table}[H]
+\centering
+\caption{Operaciones CRUD implementadas por base de datos}
+\label{tab:crud}
+\vspace{0.2cm}
+\footnotesize
+\begin{tabular}{@{}p{1.6cm}>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}p{4.3cm}@{}}
+\toprule
+\textbf{Operación} & \textbf{MongoDB} & \textbf{Cassandra} & \textbf{Neo4j} \\
+\midrule
+Crear &
+\texttt{insert\_one} de un evento de prueba &
+\texttt{INSERT} de dos filas en un día ficticio &
+\texttt{MERGE} de un usuario, un repositorio y la relación \texttt{STARRED} \\
+\addlinespace
+Consultar &
+\texttt{find\_one} por \texttt{\_id}; \texttt{find} con filtro, proyección y orden; \texttt{aggregate} por tipo &
+\texttt{SELECT} por clave de partición; lectura de indicadores del último día &
+\texttt{MATCH} del patrón; grado por repositorio; colaboradores a dos saltos \\
+\addlinespace
+Actualizar &
+\texttt{update\_one} con \texttt{\$set} sobre un campo anidado y \texttt{\$inc} &
+\texttt{UPDATE} de un contador por clave primaria completa &
+\texttt{SET} sobre una propiedad de la relación y otra del nodo \\
+\addlinespace
+Eliminar &
+\texttt{delete\_one} y verificación &
+\texttt{DELETE} de una fila y de la partición completa &
+\texttt{DELETE} de la relación y \texttt{DETACH DELETE} de los nodos \\
+\midrule
+\textit{Notebook} &
+\repo{notebooks/02_crud_mongodb.ipynb}{02\_crud\_\bk{}mongodb.ipynb} &
+\repo{notebooks/03_crud_cassandra.ipynb}{03\_crud\_\bk{}cassandra.ipynb} &
+\repo{notebooks/04_crud_neo4j.ipynb}{04\_crud\_\bk{}neo4j.ipynb} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{MongoDB}
+
+\begin{lstlisting}[style=py]
+# C - crear
+doc = {'_id': demo_id, 'type': 'WatchEvent',
+       'actor': {'id': 1, 'login': 'estudiante_utec'},
+       'repo': {'id': 1, 'name': 'utec/bigdata-demo'}, 'public': True,
+       'created_at': datetime.now(timezone.utc), 'payload': {'action': 'started'}}
+col.insert_one(doc)
+
+# R - consultar: por clave, y con filtro + proyección + orden
+col.find_one({'_id': demo_id})
+col.find({'type': 'PushEvent'}, {'actor.login': 1, 'repo.name': 1, 'created_at': 1}) \
+   .sort('created_at', -1).limit(5)
+
+# U - actualizar un campo anidado y un contador
+col.update_one({'_id': demo_id},
+               {'$set': {'payload.action': 'stopped', 'revisado': True},
+                '$inc': {'veces_editado': 1}})
+
+# D - eliminar
+col.delete_one({'_id': demo_id})
+\end{lstlisting}
+
+La actualización ilustra la flexibilidad del modelo documental: añade al documento dos campos (\texttt{revisado}, \texttt{veces\_editado}) que no existían en ningún otro, sin modificar esquema alguno.
+
+\subsection{Cassandra}
+
+\begin{lstlisting}[style=py]
+demo_day = date(2099, 1, 1)      # día ficticio: no se mezcla con datos reales
+
+# C - insertar
+s.execute('INSERT INTO events_by_hour (event_date, event_hour, event_type, event_count) '
+          'VALUES (%s,%s,%s,%s)', (demo_day, 10, 'PushEvent', 123))
+
+# R - consultar una partición completa
+s.execute('SELECT * FROM events_by_hour WHERE event_date=%s', (demo_day,))
+
+# U - actualizar (exige la clave primaria completa)
+s.execute('UPDATE events_by_hour SET event_count=%s '
+          'WHERE event_date=%s AND event_hour=%s AND event_type=%s',
+          (999, demo_day, 10, 'PushEvent'))
+
+# D - eliminar una fila y, después, la partición entera
+s.execute('DELETE FROM events_by_hour WHERE event_date=%s AND event_hour=%s AND event_type=%s',
+          (demo_day, 10, 'PushEvent'))
+s.execute('DELETE FROM events_by_hour WHERE event_date=%s', (demo_day,))
+\end{lstlisting}
+
+Dos particularidades de Cassandra quedan a la vista. Toda consulta debe indicar la clave de partición, lo que obliga a conocer de antemano por dónde se va a leer. Y \texttt{INSERT} y \texttt{UPDATE} son, en la práctica, la misma operación de escritura: ambos sobrescriben la celda identificada por la clave primaria.
+
+\subsection{Neo4j}
+
+\begin{lstlisting}[style=plano]
+// C - crear dos nodos y la relación entre ellos
+MERGE (u:User {login:'estudiante_utec'})
+MERGE (r:Repo {name:'utec/bigdata-demo'})
+MERGE (u)-[rel:STARRED]->(r)
+  SET rel.count = 1, rel.first_seen = datetime()
+
+// R - consultar el patrón
+MATCH (u:User {login:'estudiante_utec'})-[rel]->(r:Repo)
+RETURN u.login, type(rel), rel.count, r.name
+
+// U - actualizar una propiedad de la relación y otra del nodo
+MATCH (u:User {login:'estudiante_utec'})-[rel:STARRED]->(r:Repo {name:'utec/bigdata-demo'})
+  SET rel.count = rel.count + 1, u.rol = 'estudiante'
+
+// D - eliminar la relación y luego los nodos
+MATCH (:User {login:'estudiante_utec'})-[rel:STARRED]->(:Repo {name:'utec/bigdata-demo'})
+DELETE rel
+MATCH (n) WHERE n.login = 'estudiante_utec' OR n.name = 'utec/bigdata-demo'
+DETACH DELETE n
+\end{lstlisting}
+
+El \textit{notebook} cubre los cuatro casos que pide el enunciado para Neo4j: crear nodo, crear relación, actualizar propiedades (tanto de la relación como del nodo) y eliminar relaciones y nodos.

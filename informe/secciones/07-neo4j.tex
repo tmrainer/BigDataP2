@@ -1,0 +1,153 @@
+% ========================== MODELO DE NEO4J ==========================
+\section{Modelo de Grafo en Neo4j}
+\label{sec:neo4j}
+
+Neo4j es la capa de \textbf{relaciones}. El grafo representa quién interactúa con qué repositorio y a qué organización pertenece cada repositorio. Las restricciones se crean con \repo{scripts/init_neo4j.cypher}{scripts/init\_neo4j.cypher}.
+
+\subsection{Nodos y Relaciones}
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        font=\small,
+        nodo/.style={circle, draw=black, thick, minimum size=2.1cm, align=center},
+        arrow/.style={-{Stealth[scale=1.2]}, thick},
+        lbl/.style={font=\scriptsize, align=center, fill=white, inner sep=2pt}
+    ]
+    \node[nodo, fill=blue!14] (u) {\textbf{:User}\\ \texttt{login}};
+    \node[nodo, fill=green!16, right=5.6cm of u] (r) {\textbf{:Repo}\\ \texttt{name}\\ \texttt{owner}};
+    \node[nodo, fill=orange!20, right=3.6cm of r] (o) {\textbf{:Org}\\ \texttt{login}};
+    \draw[arrow] (u) -- node[lbl] {\texttt{PUSHED} $|$ \texttt{OPENED\_PR} $|$ \texttt{OPENED\_ISSUE}\\ \texttt{STARRED} $|$ \texttt{FORKED}\\[0.2em] \{\texttt{count}, \texttt{first\_seen}, \texttt{last\_seen}\}} (r);
+    \draw[arrow] (r) -- node[lbl] {\texttt{BELONGS\_TO}} (o);
+    \end{tikzpicture}
+    \caption{Modelo de grafo de propiedades: tres etiquetas de nodo y seis tipos de relación.}
+    \label{fig:modelo-grafo}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Elementos del grafo y su volumen al corte}
+\label{tab:grafo}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}llp{5.6cm}r@{}}
+\toprule
+\textbf{Elemento} & \textbf{Tipo} & \textbf{Propiedades / origen} & \textbf{Cantidad} \\
+\midrule
+\texttt{:User}          & Nodo     & \texttt{login} (único)                            & 1,397,745 \\
+\texttt{:Repo}          & Nodo     & \texttt{name} (único), \texttt{owner}             & 1,815,622 \\
+\texttt{:Org}           & Nodo     & \texttt{login} (único)                            &   123,979 \\
+\midrule
+\texttt{PUSHED}         & Relación & \texttt{PushEvent}                                & 1,500,922 \\
+\texttt{OPENED\_PR}     & Relación & \texttt{PullRequestEvent}                         &   606,893 \\
+\texttt{STARRED}        & Relación & \texttt{WatchEvent}                               &   197,442 \\
+\texttt{OPENED\_ISSUE}  & Relación & \texttt{IssuesEvent}                              &   161,658 \\
+\texttt{FORKED}         & Relación & \texttt{ForkEvent}                                &    33,319 \\
+\texttt{BELONGS\_TO}    & Relación & campo \texttt{org} del evento                     &   275,401 \\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{Total de nodos}}      & \textbf{3,337,346} \\
+\multicolumn{3}{@{}l}{\textbf{Total de relaciones}} & \textbf{2,775,635} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tres decisiones definen el modelo:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{La relación agrega, no enumera.} Entre un usuario y un repositorio existe a lo sumo una relación de cada tipo, con la propiedad \texttt{count} acumulando cuántas veces ocurrió y \texttt{first\_seen}/\texttt{last\_seen} delimitando el periodo. Los 12.0 millones de \textit{pushes} con relación en el grafo se condensan así en 1.5 millones de aristas \texttt{PUSHED}. Modelar una arista por evento multiplicaría el tamaño del grafo sin aportar nada a las preguntas de conectividad.
+    \item \textbf{El tipo de acción es el tipo de la relación.} Usar \texttt{PUSHED}, \texttt{STARRED}, etc.\ como tipos, en lugar de una relación genérica con una propiedad \texttt{tipo}, permite filtrar por tipo durante el recorrido sin leer propiedades.
+    \item \textbf{Solo cinco tipos de evento generan relaciones.} Son los que expresan un vínculo directo de un usuario con un repositorio. Comentarios, revisiones y borrados no crean aristas.
+\end{itemize}
+
+\subsection{Restricciones}
+
+Las tres restricciones de unicidad garantizan que no existan nodos duplicados y crean, a la vez, el índice que usa \texttt{MERGE} para localizar cada nodo:
+
+\begin{lstlisting}[style=plano]
+CREATE CONSTRAINT user_login IF NOT EXISTS FOR (u:User) REQUIRE u.login IS UNIQUE;
+CREATE CONSTRAINT repo_name  IF NOT EXISTS FOR (r:Repo) REQUIRE r.name  IS UNIQUE;
+CREATE CONSTRAINT org_login  IF NOT EXISTS FOR (o:Org)  REQUIRE o.login IS UNIQUE;
+\end{lstlisting}
+
+\subsection{Construcción del Grafo}
+
+La etapa 5 (\repo{src/load_neo4j.py}{src/load\_neo4j.py}) no lee el archivo de origen ni MongoDB: lee la partición de la hora en la tabla \texttt{user\_repo\_\bk{}interactions\_\bk{}by\_hour} de Cassandra, agrupa las filas por tipo de relación y las envía en lotes de 1,000 con \texttt{UNWIND} y \texttt{MERGE}.
+
+\bloque{Consulta de carga de relaciones (simplificada; el tipo de relación se sustituye por lote)}
+\begin{lstlisting}[style=plano]
+UNWIND $rows AS row
+MERGE (u:User {login: row.user})
+MERGE (r:Repo {name: row.repo})
+  ON CREATE SET r.owner = split(row.repo, '/')[0]
+MERGE (u)-[rel:PUSHED]->(r)
+  ON CREATE SET rel.count = row.n,
+                rel.first_seen = datetime(row.ts), rel.last_seen = datetime(row.ts)
+  ON MATCH  SET rel.count = coalesce(rel.count, 0) + row.n,
+                rel.last_seen = CASE WHEN datetime(row.ts) > rel.last_seen
+                                     THEN datetime(row.ts) ELSE rel.last_seen END
+\end{lstlisting}
+
+\paragraph{Control de tamaño.} En cada hora solo entran al grafo los 10,000 repositorios y los 20,000 usuarios más activos de esa hora (parámetros \texttt{NEO4J\_TOP\_REPOS} y \texttt{NEO4J\_TOP\_USERS}). El grafo es, por tanto, una muestra sesgada hacia la actividad más intensa, lo que se declara en la metodología del \textit{dashboard}.
+
+\paragraph{Idempotencia.} \texttt{MERGE} evita duplicar nodos y aristas, pero no evita sumar dos veces el \texttt{count}. Por eso la etapa consulta antes la columna \texttt{loaded\_neo4j} de \texttt{pipeline\_runs}: si la hora ya fue cargada en el grafo, se omite.
+
+\paragraph{Reconstrucción.} Como el grafo se deriva íntegramente de Cassandra, puede regenerarse desde cero con \repo{scripts/rebuild_neo4j.py}{scripts/rebuild\_neo4j.py} sin volver a descargar ni a procesar los archivos de origen. Es la consecuencia práctica de la arquitectura por capas.
+
+\subsection{Consultas de Grafo}
+
+Las dos consultas siguientes ilustran por qué este dato reside en Neo4j. La primera calcula el KPI~5; la segunda encuentra a los usuarios que comparten repositorios con uno dado, un recorrido de dos saltos.
+
+\begin{lstlisting}[style=plano]
+// Repositorios con más usuarios distintos conectados (grado del nodo)
+MATCH (u:User)-[]->(r:Repo)
+RETURN r.name AS repo, count(DISTINCT u) AS usuarios
+ORDER BY usuarios DESC LIMIT 5;
+
+// Usuarios que colaboran en los mismos repositorios que un usuario dado
+MATCH (a:User {login: $login})-[]->(r:Repo)<-[]-(b:User)
+WHERE a <> b
+RETURN b.login AS colega, count(DISTINCT r) AS repos_en_comun
+ORDER BY repos_en_comun DESC LIMIT 5;
+\end{lstlisting}
+
+\begin{table}[H]
+\centering
+\caption{Resultado de la primera consulta sobre el grafo acumulado}
+\label{tab:top-repos}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Repositorio} & \textbf{Usuarios distintos conectados} \\
+\midrule
+\texttt{morluto/rea}                     & 6,720 \\
+\texttt{storytold/photocraft}            & 1,461 \\
+\texttt{Ebony-Vinyl/dsh-our-free-model}  & 1,095 \\
+\texttt{boykopovar/AnyPS5}               & 1,006 \\
+\texttt{debpalash/VoiceStudio}           &   810 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El primer repositorio cuadruplica al segundo. El grafo permite ir más allá del número, porque conserva el tipo de cada relación (Tabla~\ref{tab:morluto}).
+
+\begin{table}[H]
+\centering
+\caption{Relaciones entrantes de \texttt{morluto/rea} por tipo}
+\label{tab:morluto}
+\vspace{0.2cm}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{Tipo de relación} & \textbf{Relaciones} & \textbf{Interacciones (\texttt{count})} \\
+\midrule
+\texttt{STARRED}       & 5,522 & 5,524 \\
+\texttt{FORKED}        & 1,141 & 1,141 \\
+\texttt{OPENED\_PR}    &    57 &   137 \\
+\texttt{OPENED\_ISSUE} &    26 &   173 \\
+\texttt{PUSHED}        &     7 &   410 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El 82\,\% de los usuarios conectados (5,502) tiene como única relación una estrella, y la actividad de código se reduce a 7 cuentas que hicieron \textit{push}. Un grado alto no implica por sí solo una comunidad de colaboradores: aquí describe popularidad, no colaboración, y esa distinción solo es visible al examinar el tipo de las relaciones. El vecindario se explora de forma interactiva en el \textit{dashboard} (Figura~\ref{fig:dash-neo4j-vecindario}).

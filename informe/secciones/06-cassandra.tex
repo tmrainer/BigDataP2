@@ -1,0 +1,98 @@
+% ======================== MODELO DE CASSANDRA ========================
+\section{Modelo de Datos de Cassandra}
+\label{sec:cassandra}
+
+Cassandra es la capa de \textbf{series temporales y agregados}. El modelo sigue el principio de diseño orientado a consultas (\textit{query-first}): cada tabla existe para responder una pregunta concreta del \textit{dashboard} o de un indicador, y su clave de partición se elige para que esa pregunta se resuelva leyendo una sola partición. No hay \textit{joins}: cuando dos preguntas necesitan el mismo dato organizado de forma distinta, el dato se escribe dos veces. El esquema se crea con \repo{scripts/init_cassandra.cql}{scripts/init\_cassandra.cql}.
+
+\subsection{Tablas}
+
+El \textit{keyspace} \texttt{github\_metrics} contiene siete tablas (Tabla~\ref{tab:tablas-cassandra}).
+
+\begin{table}[H]
+\centering
+\caption{Tablas de Cassandra: clave primaria y consulta que responde cada una. En la clave, la parte entre paréntesis dobles es la clave de partición y el resto son columnas de agrupamiento.}
+\label{tab:tablas-cassandra}
+\vspace{0.2cm}
+\footnotesize
+\begin{tabular}{@{}p{4.4cm}p{5.0cm}p{5.3cm}@{}}
+\toprule
+\textbf{Tabla} & \textbf{Clave primaria} & \textbf{Consulta que responde} \\
+\midrule
+\texttt{events\_by\_hour} &
+\texttt{((event\_date)), event\_hour, event\_type} &
+Eventos de cada tipo en cada hora de un día (Gráficos 1 y 2; KPI 1 y 2). \\
+\addlinespace
+\texttt{repo\_activity\_by\_day} &
+\texttt{((event\_date)), repo\_name} &
+Actividad de cada repositorio en un día, con conteos por tipo (Tabla de repositorios). \\
+\addlinespace
+\texttt{user\_activity\_by\_day} &
+\texttt{((event\_date)), actor\_login} &
+Eventos generados por cada usuario en un día (Tabla de usuarios; base del KPI 3). \\
+\addlinespace
+\texttt{user\_repo\_\bk{}interactions\_\bk{}by\_hour} &
+\texttt{((event\_date, event\_hour)), actor\_login, repo\_name, event\_type} &
+Qué hizo cada usuario sobre cada repositorio en una hora. Es la fuente de la etapa 5 (Neo4j). \\
+\addlinespace
+\texttt{daily\_totals} &
+\texttt{((year)), event\_date} desc. &
+Totales diarios de eventos, usuarios y repositorios distintos (Gráfico 3; KPI 3). \\
+\addlinespace
+\texttt{kpis\_by\_date} &
+\texttt{((event\_date)), kpi\_name} &
+Indicadores calculados por la etapa 6, leídos por el \textit{dashboard}. \\
+\addlinespace
+\texttt{pipeline\_runs} &
+\texttt{((run\_date)), run\_hour} &
+Trazabilidad e idempotencia: qué horas se procesaron y con cuántos eventos. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\bloque{Definición de dos tablas representativas}
+\begin{lstlisting}[style=cql]
+-- Eventos de cada tipo en cada hora de un día.
+-- Partición por día: las 24 horas de un día viven en una sola partición.
+CREATE TABLE events_by_hour (
+    event_date  date,
+    event_hour  int,
+    event_type  text,
+    event_count int,
+    PRIMARY KEY ((event_date), event_hour, event_type)
+) WITH CLUSTERING ORDER BY (event_hour ASC, event_type ASC);
+
+-- Totales diarios. Partición por año, días ordenados del más reciente al más antiguo.
+CREATE TABLE daily_totals (
+    year         int,
+    event_date   date,
+    total_events int,
+    unique_users int,
+    unique_repos int,
+    PRIMARY KEY ((year), event_date)
+) WITH CLUSTERING ORDER BY (event_date DESC);
+\end{lstlisting}
+
+\subsection{Decisiones de Particionamiento}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{El día como clave de partición.} En \texttt{events\_by\_hour} una partición contiene a lo sumo $24 \times 16 = 384$ filas (horas por tipos de evento), por lo que su tamaño está acotado y no crece con el tiempo. El gráfico de eventos por hora se obtiene con una única lectura.
+    \item \textbf{El año como clave de partición en \texttt{daily\_totals}.} La serie diaria completa se necesita siempre junta. Con el año como partición y la fecha como columna de agrupamiento descendente, la serie se lee en una sola consulta ya ordenada, y el día más reciente es la primera fila. La partición alcanza como máximo 366 filas.
+    \item \textbf{Clave de partición compuesta (día, hora) en las interacciones.} Un día de octubre genera cientos de miles de pares usuario--repositorio; particionar solo por día produciría particiones demasiado grandes. Con (día, hora) cada partición corresponde exactamente a la unidad de trabajo del \textit{pipeline}, que la etapa 5 lee completa para construir el grafo.
+    \item \textbf{Particiones anchas asumidas.} \texttt{repo\_activity\_by\_day} sí tiene particiones grandes en los días de mayor volumen (692 mil repositorios distintos el 12 de octubre). Se aceptó porque la consulta que la usa es un ranking del día, y el \textit{dashboard} limita la lectura histórica de esta tabla a los últimos siete días.
+\end{itemize}
+
+\subsection{Escritura e Idempotencia}
+
+La etapa 4 (\repo{src/load_cassandra.py}{src/load\_cassandra.py}) lee de MongoDB los eventos de la hora, los agrega en memoria y los escribe con sentencias preparadas y 64 peticiones concurrentes. El tratamiento difiere según la granularidad de la tabla:
+
+\begin{itemize}[leftmargin=*]
+    \item Las tablas \textbf{por hora} (\texttt{events\_by\_hour}, interacciones) reciben un \texttt{INSERT} directo: cada hora se procesa una sola vez y sobrescribir es seguro.
+    \item Las tablas \textbf{por día} (repositorios y usuarios) deben acumular las 24 corridas del día, de modo que se actualizan leyendo el valor existente, sumando y reescribiendo.
+    \item \texttt{daily\_totals} se \textbf{recalcula} desde las tablas del día en cada corrida, por lo que es exacto y no arrastra errores de acumulación.
+\end{itemize}
+
+Para que un reintento de Airflow o una ejecución manual no sume dos veces, antes de agregar se consulta \texttt{pipeline\_runs}: si la hora ya tiene fila, la etapa se omite. La limitación de este esquema está identificada: si la escritura falla a mitad de una hora, antes de registrar la fila, el reintento puede acumular dos veces la parte ya escrita en las tablas diarias. No se observó ese caso durante la operación; la corrección prevista es borrar el día afectado y recargarlo desde MongoDB, que conserva el dato original.
+
+\subsection{Tamaño}
+
+Al corte, \texttt{pipeline\_runs} tiene 985 filas (una por hora procesada), \texttt{events\_by\_hour} 13,995, \texttt{daily\_totals} 42 (una por día) y \texttt{kpis\_by\_date} 210 (cinco indicadores por día). El volumen Docker de Cassandra ocupa 2.0~GB. Según \texttt{nodetool tablestats}, el espacio vivo se concentra en tres tablas: \texttt{user\_repo\_\bk{}interactions\_\bk{}by\_hour} (963~MB), \texttt{repo\_activity\_by\_day} (460~MB) y \texttt{user\_activity\_by\_day} (177~MB). Las cuatro tablas que alimentan los gráficos temporales y los indicadores suman menos de 1~MB: el dato que el tablero lee con más frecuencia es también el más pequeño.

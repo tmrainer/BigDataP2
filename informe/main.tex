@@ -1,0 +1,148 @@
+% =====================================================================
+%  Proyecto Grupal II - Big Data (UTEC)
+%  Arquitectura multimodelo sobre GitHub Events
+%
+%  ESTRUCTURA
+%    main.tex          -> preambulo, portada e inclusion de secciones
+%    secciones/*.tex   -> una seccion del informe por archivo
+%    imagenes/         -> logo, capturas del dashboard y de Airflow
+%
+%  Compilar:  tectonic main.tex   (o pdfLaTeX, dos pasadas)
+% =====================================================================
+\documentclass[12pt,a4paper]{article}
+
+% ---------- Codificacion e idioma ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla,es-noshorthands]{babel}
+
+% ---------- Geometria y tipografia ----------
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{lmodern}
+\usepackage{microtype}
+\setlength{\parskip}{0.4em}
+
+% ---------- Matematicas ----------
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% ---------- Graficos y tablas ----------
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+
+\graphicspath{{imagenes/}}
+
+% ---------- Diagramas ----------
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, shapes.geometric, fit, backgrounds, calc}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+
+% ---------- Enlaces ----------
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+\urlstyle{same}
+
+% ---------- Bloques de codigo ----------
+\usepackage{listings}
+
+\definecolor{codebg}{gray}{0.96}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codecm}{RGB}{0,120,0}
+\definecolor{codestr}{RGB}{200,90,0}
+\definecolor{coderule}{gray}{0.75}
+
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    rulecolor=\color{coderule},
+    breaklines=true,
+    breakatwhitespace=false,
+    showstringspaces=false,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecm}\itshape,
+    stringstyle=\color{codestr},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=7pt,
+    xleftmargin=2.2em,
+    framexleftmargin=2em,
+    captionpos=b,
+    tabsize=4,
+    inputencoding=utf8,
+    extendedchars=true,
+    literate=%
+      {á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+      {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Ú}{{\'U}}1
+      {ñ}{{\~n}}1 {Ñ}{{\~N}}1 {ü}{{\"u}}1 {Ü}{{\"U}}1
+      {¿}{{?`}}1 {¡}{{!`}}1 {°}{{\textdegree}}1
+}
+
+\lstdefinestyle{py}{language=Python}
+\lstdefinestyle{sh}{language=bash, numbers=none}
+\lstdefinestyle{cql}{language=SQL, numbers=none, morekeywords={KEYSPACE,TEXT,CLUSTERING,IF,EXISTS,REPLICATION,USE}}
+\lstdefinestyle{plano}{numbers=none}
+
+% ---------- Ajuste fino del corte de linea ----------
+% Ultimo recurso para que LaTeX estire los espacios antes de desbordar el
+% margen, en lugar de sacar el texto fuera de la caja.
+\setlength{\emergencystretch}{3em}
+\hyphenpenalty=1000
+\tolerance=2000
+
+% \bk introduce un punto de corte de anchura cero y SIN guion. Se inserta en
+% rutas y nombres largos escritos en \texttt para que puedan partirse al final
+% de linea sin desbordar el margen. Es robusto dentro de tablas y pies de
+% figura, a diferencia de los comandos del paquete url.
+\newcommand{\bk}{\discretionary{}{}{}}
+
+% ---------- Repositorio de codigo ----------
+\newcommand{\repourl}{https://github.com/tmrainer/BigDataP2}
+
+% \repo{ruta}: enlaza un archivo o carpeta del repositorio.
+% #1 = ruta real (para la URL)   #2 = ruta tal como se muestra (con \_ y \bk)
+\newcommand{\repo}[2]{\href{\repourl/blob/main/#1}{\texttt{#2}}}
+
+% ---------- Atajos ----------
+% Encabezado de bloque seguro delante de un lstlisting (un \paragraph se solapa)
+\newcommand{\bloque}[1]{\par\medskip\noindent\textbf{#1}\par\nopagebreak\vspace{0.3em}}
+
+% Figura de captura de consulta: #1 ruta  #2 pie
+\newcommand{\captura}[2]{%
+  \begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.93\textwidth]{#1}
+    \caption{#2}
+  \end{figure}%
+}
+
+\begin{document}
+
+\input{secciones/00-portada}
+
+\tableofcontents
+\newpage
+
+\input{secciones/01-introduccion}
+\input{secciones/02-problema}
+\input{secciones/03-arquitectura}
+\input{secciones/04-dataset}
+\input{secciones/05-mongodb}
+\input{secciones/06-cassandra}
+\input{secciones/07-neo4j}
+\input{secciones/08-airflow}
+\input{secciones/09-crud}
+\input{secciones/10-kpis}
+\input{secciones/11-dashboard}
+\input{secciones/12-conclusiones}
+
+\end{document}
