@@ -233,10 +233,10 @@ services:
       PYTHONPATH: /app/src
       # Tema fijo claro y de alto contraste (no depende del navegador de quien lo abre)
       STREAMLIT_THEME_BASE: light
-      STREAMLIT_THEME_PRIMARY_COLOR: "#1f4e9c"
-      STREAMLIT_THEME_BACKGROUND_COLOR: "#ffffff"
-      STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR: "#f2f4f8"
-      STREAMLIT_THEME_TEXT_COLOR: "#111111"
+      STREAMLIT_THEME_PRIMARY_COLOR: "#c2570f"
+      STREAMLIT_THEME_BACKGROUND_COLOR: "#f8f1e4"
+      STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR: "#efe4cf"
+      STREAMLIT_THEME_TEXT_COLOR: "#2b1a10"
     ports:
       - "8501:8501"          # público en la VM (regla de firewall allow-dashboard-8501)
     volumes:

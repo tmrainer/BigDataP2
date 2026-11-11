@@ -18,13 +18,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config  # noqa: E402
 
 # ------------------------------------------------------------------ estilo
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
-INK, INK2, MUTED, GRID, AXIS = "#0b0b0b", "#3b3f46", "#6b6f78", "#e6e7ea", "#c3c2b7"
-OTHER = "#c3c2b7"
-ACCENT, ACCENT_SOFT = "#2a78d6", "#9ec5f4"
-POS, NEG = "#2a78d6", "#e34948"
+SERIES = ["#d9691e", "#6b3e24", "#e0a526", "#3f8a84", "#b23a2a", "#6b7329", "#c49a6c", "#8a4f6d"]
+INK, INK2, MUTED, GRID, AXIS = "#2b1a10", "#55392a", "#7a6250", "#e9dec9", "#c9b99f"
+BG, CARD, BAND, NEUTRAL = "#f8f1e4", "#fffaf0", "#efe4cf", "#a8957c"
+OTHER = "#c9b99f"
+FILL_ALPHA = 0.8  # rellenos atenuados: el tono identifica la serie sin saturar la vista
+MAIN_TYPES = 4
+ACCENT, ACCENT_SOFT = "#d9691e", "#f0c08f"
+POS, NEG = "#d9691e", "#6b3e24"
 FONT = "IBM Plex Sans, Inter, Segoe UI, system-ui, sans-serif"
-DB_COLOR = {"Cassandra": "#2a78d6", "MongoDB": "#008300", "Neo4j": "#6250d6"}
+DB_COLOR = {"Cassandra": "#c2570f", "MongoDB": "#6b7329", "Neo4j": "#6b3e24"}
 
 EVENT_ES = {
     "PullRequestEvent": "Pull request", "IssuesEvent": "Issue", "IssueCommentEvent": "Comentario en issue/PR",
@@ -35,7 +38,7 @@ EVENT_ES = {
     "PublicEvent": "Repositorio hecho público", "GollumEvent": "Edición de wiki", "DiscussionEvent": "Discusión",
     "SponsorshipEvent": "Patrocinio",
 }
-# Orden validado para daltonismo; el color sigue al tipo, no a su posición en el ranking
+# El color sigue al tipo, no a su posición en el ranking
 TYPE_ORDER = ["PullRequestEvent", "IssuesEvent", "IssueCommentEvent", "PullRequestReviewEvent", "WatchEvent",
               "PushEvent", "CreateEvent", "DeleteEvent"]
 TYPE_COLOR = dict(zip(TYPE_ORDER, SERIES))
@@ -116,8 +119,8 @@ KPI_DEF = [
 LAYOUT = dict(
     font=dict(family=FONT, color=INK2, size=13),
     margin=dict(l=4, r=8, t=8, b=4),
-    paper_bgcolor="#ffffff", plot_bgcolor="#ffffff", separators=".,",
-    hoverlabel=dict(bgcolor="#ffffff", bordercolor="#c9ccd3", font=dict(color=INK, size=13, family=FONT), align="left"),
+    paper_bgcolor=BG, plot_bgcolor=BG, separators=".,",
+    hoverlabel=dict(bgcolor=CARD, bordercolor="#cdbb9f", font=dict(color=INK, size=13, family=FONT), align="left"),
     xaxis=dict(showgrid=False, showline=True, linecolor=AXIS, ticks="", tickfont=dict(color=INK2, size=12),
                title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=True, automargin=True),
     yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False, showline=False, tickfont=dict(color=INK2, size=12),
@@ -132,7 +135,7 @@ CSS = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root { --ink:#0b0b0b; --ink2:#3b3f46; --muted:#6b6f78; --hair:#e6e7ea; --hair2:#d5d8de; --panel:#f6f7f9; --brand:#1f4e9c; --data:#2a78d6; }
+:root { --ink:#2b1a10; --ink2:#55392a; --muted:#7a6250; --hair:#e9dec9; --hair2:#dccdb3; --rule:#bfa98a; --bg:#f8f1e4; --card:#fffaf0; --panel:#efe4cf; --brand:#a8480f; --data:#d9691e; }
 html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] * { font-family:'IBM Plex Sans', Inter, 'Segoe UI', system-ui, sans-serif; }
 [data-testid="stIconMaterial"] { font-family:'Material Symbols Rounded' !important; }
 code, pre, pre *, [data-testid="stCode"] * { font-family:'IBM Plex Mono', ui-monospace, Menlo, monospace !important; }
@@ -141,7 +144,7 @@ code, pre, pre *, [data-testid="stCode"] * { font-family:'IBM Plex Mono', ui-mon
 .katex-display { padding:.4em 0 .3em; overflow:visible !important; }
 [data-testid="stMarkdownContainer"]:has(> .katex-display) { overflow:visible !important; }
 [data-testid="stAppDeployButton"] { display:none; }
-[data-testid="stAppViewContainer"] { color:var(--ink); }
+[data-testid="stAppViewContainer"] { color:var(--ink); background:var(--bg); }
 .block-container { padding-top:4.5rem; padding-bottom:3rem; max-width:1480px; }
 [data-testid="stWidgetLabel"] p { font-size:.78rem !important; font-weight:600; color:var(--ink2); text-transform:uppercase; letter-spacing:.05em; }
 [data-testid="stTab"] p { font-size:1rem !important; font-weight:600 !important; color:var(--ink2); }
@@ -167,7 +170,7 @@ code { font-size:.86em; color:var(--ink2); background:var(--panel); padding:1px 
 .tiles { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:14px; }
 @media (max-width:1180px) { .tiles { grid-template-columns:repeat(3, minmax(0, 1fr)); } }
 @media (max-width:720px) { .tiles { grid-template-columns:1fr; } }
-.tile { background:#fff; border:1px solid var(--hair2); border-top:4px solid var(--db); border-radius:8px; padding:13px 16px 11px; display:flex; flex-direction:column; gap:6px; min-width:0; cursor:help; }
+.tile { background:var(--card); border:1px solid var(--hair2); border-top:4px solid var(--db); border-radius:8px; padding:13px 16px 11px; display:flex; flex-direction:column; gap:6px; min-width:0; cursor:help; }
 .tile-no { font-size:.68rem; font-weight:600; color:var(--muted); letter-spacing:.08em; margin-bottom:-4px; }
 .tile-label { font-size:.92rem; font-weight:600; color:var(--ink2); }
 .tile-value { font-size:2.25rem; font-weight:600; color:var(--ink); line-height:1.12; letter-spacing:-.01em; }
@@ -178,29 +181,29 @@ code { font-size:.86em; color:var(--ink2); background:var(--panel); padding:1px 
 .tile-src { margin-top:auto; padding-top:8px; border-top:1px solid var(--hair); font-size:.76rem; color:var(--muted); display:flex; flex-direction:column; align-items:flex-start; gap:3px; }
 .tile-src code { font-size:.72rem; padding:0 4px; white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .sw { display:inline-block; width:9px; height:9px; border-radius:2px; }
-.up { color:#006300; } .down { color:#d03b3b; } .na { color:var(--muted); }
+.up { color:#4f5a12; } .down { color:#a52a1c; } .na { color:var(--muted); }
 .arr { font-size:.5em; vertical-align:.32em; margin-right:4px; }
 .nw { white-space:nowrap; }
 .tiles-foot { display:flex; flex-wrap:wrap; gap:4px 18px; font-size:.8rem; color:var(--muted); }
 .tiles-foot span { display:inline-flex; align-items:center; gap:6px; }
 .badge { display:inline-block; font-size:.7rem; font-weight:600; letter-spacing:.03em; padding:1px 8px; border-radius:999px; border:1px solid var(--hair2); color:var(--ink2); background:var(--panel); white-space:nowrap; vertical-align:1px; }
-.badge.warn { color:#7a4a00; background:#fff4de; border-color:#f0cf8f; }
-.badge.ok { color:#1d5a2e; background:#ecf6ef; border-color:#c5e2cd; }
-.callout { display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; border:1px solid #f0cf8f; background:#fffaf0; border-radius:8px; padding:10px 14px; font-size:.9rem; color:#4d3300; line-height:1.45; }
+.badge.warn { color:#7a4a00; background:#fdecc8; border-color:#e8c27a; }
+.badge.ok { color:#4a5216; background:#eef0d4; border-color:#cfd4a0; }
+.callout { display:flex; gap:10px 14px; align-items:center; flex-wrap:wrap; border:1px solid #e8c27a; background:#fdecc8; border-radius:8px; padding:10px 14px; font-size:.9rem; color:#4d3300; line-height:1.45; }
 .strip { display:inline-flex; gap:1px; vertical-align:middle; }
-.strip i { display:inline-block; width:7px; height:14px; border-radius:1px; background:#e1e3e8; }
+.strip i { display:inline-block; width:7px; height:14px; border-radius:1px; background:#e4d8c2; }
 .strip i.on { background:var(--data); }
 .strip i.g { margin-left:3px; }
 .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }
-.stat { border:1px solid var(--hair2); border-radius:8px; padding:10px 14px; background:#fff; }
+.stat { border:1px solid var(--hair2); border-radius:8px; padding:10px 14px; background:var(--card); }
 .stat .l { font-size:.72rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
 .stat .v { font-size:1.55rem; font-weight:600; color:var(--ink); line-height:1.25; margin-top:2px; }
 .stat .s { font-size:.8rem; color:var(--ink2); margin-top:2px; line-height:1.4; }
 table.t { width:100%; border-collapse:collapse; font-size:.9rem; }
-table.t th { text-align:left; font-size:.7rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; padding:8px 10px; border-bottom:1px solid #b9bdc6; white-space:nowrap; }
+table.t th { text-align:left; font-size:.7rem; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; padding:8px 10px; border-bottom:1px solid var(--rule); white-space:nowrap; }
 table.t th.sorted { color:var(--brand); }
 table.t td { padding:7px 10px; border-bottom:1px solid var(--hair); color:var(--ink); vertical-align:middle; }
-table.t tbody tr:last-child td { border-bottom:1px solid #b9bdc6; }
+table.t tbody tr:last-child td { border-bottom:1px solid var(--rule); }
 table.t .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 table.t td.rk { color:var(--muted); width:2.2em; font-variant-numeric:tabular-nums; }
 table.t td.nm { font-weight:500; min-width:9em; }
@@ -208,7 +211,7 @@ table.t td.nw { white-space:nowrap; }
 table.def td { vertical-align:top; font-size:.88rem; line-height:1.45; }
 table.def td code { white-space:normal; }
 .cb { display:flex; align-items:center; justify-content:flex-end; gap:10px; }
-.cb .tr { width:60px; height:6px; background:#eef0f3; border-radius:3px; overflow:hidden; flex:none; }
+.cb .tr { width:60px; height:6px; background:#eadfca; border-radius:3px; overflow:hidden; flex:none; }
 .cb .tr span { display:block; height:100%; background:var(--data); border-radius:3px; }
 [data-testid="stCode"] code { font-size:.78rem !important; line-height:1.55 !important; }
 .tnote { font-size:.8rem; color:var(--muted); margin-top:6px; line-height:1.45; }
@@ -222,7 +225,7 @@ table.def td code { white-space:normal; }
 .kf-sym { font-size:.82rem; color:var(--ink2); line-height:1.5; }
 .kf-read { font-size:.9rem; color:var(--ink); line-height:1.5; background:var(--panel); border-radius:6px; padding:8px 12px; margin-top:4px; }
 .flow { display:flex; flex-wrap:wrap; align-items:stretch; gap:8px; }
-.flow .st { flex:1 1 140px; border:1px solid var(--hair2); border-top:4px solid var(--c); border-radius:8px; padding:10px 12px; background:#fff; }
+.flow .st { flex:1 1 140px; border:1px solid var(--hair2); border-top:4px solid var(--c); border-radius:8px; padding:10px 12px; background:var(--card); }
 .flow .st .k { font-size:.68rem; font-weight:600; color:var(--muted); letter-spacing:.07em; text-transform:uppercase; }
 .flow .st .t { font-size:.95rem; font-weight:600; color:var(--ink); margin-top:2px; }
 .flow .st .d { font-size:.8rem; color:var(--ink2); margin-top:4px; line-height:1.42; }
@@ -395,7 +398,7 @@ def hbar(labels, values, colors, text, hover, customdata=None, height=None) -> g
     n = max(len(labels), 1)
     height = height or 34 * n + 24
     slot = (height - 24) / n
-    fig = go.Figure(go.Bar(x=values, y=labels, orientation="h", marker=dict(color=colors, cornerradius=4),
+    fig = go.Figure(go.Bar(x=values, y=labels, orientation="h", marker=dict(color=colors, cornerradius=4, opacity=FILL_ALPHA),
                            text=text, textposition="outside", cliponaxis=False, textfont=dict(color=INK2, size=12),
                            customdata=customdata, hovertemplate=hover))
     room = 1 + max(0.3, 0.028 * max((len(str(t)) for t in text), default=0))
@@ -598,7 +601,7 @@ def mongo_day(d: date) -> dict:
 # ------------------------------------------------------------------ gráficos
 def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, dict]:
     totals = day.groupby("event_type")["event_count"].sum().sort_values(ascending=False)
-    main = sorted([t for t in totals.index if t in TYPE_COLOR][:5], key=TYPE_ORDER.index)
+    main = sorted([t for t in totals.index if t in TYPE_COLOR][:MAIN_TYPES], key=TYPE_ORDER.index)
     serie = day["event_type"].where(day["event_type"].isin(main), "Otros")
     pv = day.assign(serie=serie).pivot_table(index="event_hour", columns="serie", values="event_count", aggfunc="sum").reindex(range(24))
     cats = [f"{h:02d}:00" for h in range(24)]
@@ -606,7 +609,7 @@ def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, di
     for t in main + (["Otros"] if "Otros" in pv.columns else []):
         name = EVENT_ES.get(t, t) if t != "Otros" else "Otros tipos"
         fig.add_bar(x=cats, y=[None if pd.isna(v) else v for v in pv[t]], name=name,
-                    marker=dict(color=TYPE_COLOR.get(t, OTHER), line=dict(color="#ffffff", width=1)),
+                    marker=dict(color=TYPE_COLOR.get(t, OTHER), opacity=FILL_ALPHA, line=dict(color=BG, width=1)),
                     hovertemplate=f"{name}: %{{y:,.0f}}<extra></extra>")
     tot = pv.sum(axis=1, min_count=1)
     fig.add_scatter(x=cats, y=[None if pd.isna(v) else v for v in tot], mode="markers", marker=dict(opacity=0, size=1),
@@ -626,7 +629,7 @@ def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, di
                                 marker=dict(symbol="triangle-down", size=9, color=INK2), name="Volumen atípico (< 25 % de la mediana)",
                                 hovertemplate="Volumen atípico: %{customdata:,.0f} eventos<extra></extra>", customdata=list(atyp))
     for a, b in runs_of(set(range(24)) - set(hours)):
-        fig.add_vrect(x0=a - 0.5, x1=b + 0.5, fillcolor="#f2f3f5", line_width=0, layer="below")
+        fig.add_vrect(x0=a - 0.5, x1=b + 0.5, fillcolor=BAND, line_width=0, layer="below")
         if b - a >= 1:
             fig.add_annotation(x=(a + b) / 2, y=0.5, yref="paper", text="Sin datos<br>cargados", showarrow=False,
                                font=dict(size=11, color=MUTED))
@@ -650,7 +653,7 @@ def fig_composition(totals: pd.Series, main: list[str]) -> go.Figure:
     detail = [t if t != "Otros" else " · ".join(f"{EVENT_ES.get(o, o)} {n:,}" for o, n in others.head(4).items()) for t, _ in rows]
     return hbar(labels, vals, [TYPE_COLOR.get(t, OTHER) for t, _ in rows],
                 [f"{v / total * 100:.1f} %  ·  {fnum(v)}" for v in vals],
-                "<b>%{y}</b><br>%{x:,} eventos<br><span style='color:#6b6f78'>%{customdata}</span><extra></extra>",
+                "<b>%{y}</b><br>%{x:,} eventos<br><span style='color:#7a6250'>%{customdata}</span><extra></extra>",
                 customdata=detail, height=420)
 
 
@@ -659,7 +662,7 @@ def fig_daily(dd: pd.DataFrame, sel: date) -> go.Figure:
     fig = go.Figure()
     for a, b in runs_of([i for i in range((d1 - d0).days + 1) if (d0 + timedelta(days=i)).weekday() >= 5]):
         fig.add_vrect(x0=pd.Timestamp(d0 + timedelta(days=a)) - pd.Timedelta(hours=12),
-                      x1=pd.Timestamp(d0 + timedelta(days=b)) + pd.Timedelta(hours=12), fillcolor="#f1f2f4", line_width=0, layer="below")
+                      x1=pd.Timestamp(d0 + timedelta(days=b)) + pd.Timedelta(hours=12), fillcolor=BAND, line_width=0, layer="below")
     full = dd["n_hours"] >= 24
     hover = ("<b>%{customdata[0]}</b><br>%{y:,} eventos<br>%{customdata[1]} de 24 h cargadas · %{customdata[2]:,.0f} eventos/h"
              "<br>%{customdata[3]:,} usuarios activos · %{customdata[4]:,} repositorios<extra></extra>")
@@ -678,7 +681,7 @@ def fig_daily(dd: pd.DataFrame, sel: date) -> go.Figure:
         fig.add_annotation(x=pd.Timestamp(sel), y=float(srow["total_events"].iloc[0]), text="Seleccionado", showarrow=True,
                            arrowhead=0, arrowwidth=1, arrowcolor=INK2, ax=0, ay=-40, standoff=18 if srow["n_hours"].iloc[0] < 24 else 2,
                            xanchor="right" if pos > 0.9 else "left" if pos < 0.1 else "center", font=dict(size=11, color=INK),
-                           bgcolor="rgba(255,255,255,0.9)")
+                           bgcolor="rgba(248,241,228,0.9)")
     fig.update_layout(**layout(barmode="overlay", bargap=0.25, showlegend=True, hovermode="closest",
                                xaxis=date_axis(d0, d1, 16), yaxis={"tickformat": "~s", "title": {"text": "Eventos por día"}}))
     return fig
@@ -691,14 +694,14 @@ def fig_trend(dd: pd.DataFrame, values: dict, sel: date, ytitle: str, hover_fmt:
     fig = go.Figure()
     fig.add_scatter(x=[pd.Timestamp(d) for d in days], y=[values.get(d) for d in days], mode="lines", connectgaps=False,
                     line=dict(color=ACCENT, width=2), hoverinfo="skip")
-    for is_partial, fill in ((False, ACCENT), (True, "#ffffff")):
+    for is_partial, fill in ((False, ACCENT), (True, BG)):
         pts = [d for d in days if values.get(d) is not None and partial.get(d, False) == is_partial]
         if pts:
             fig.add_scatter(x=[pd.Timestamp(d) for d in pts], y=[values[d] for d in pts], mode="markers",
-                            marker=dict(size=8, color=fill, line=dict(color=ACCENT if is_partial else "#ffffff", width=2)),
+                            marker=dict(size=8, color=fill, line=dict(color=ACCENT if is_partial else BG, width=2)),
                             customdata=[fdate(d, weekday=True) + (" (parcial)" if is_partial else "") for d in pts],
                             hovertemplate=f"<b>%{{customdata}}</b><br>%{{y:{hover_fmt}}}{suffix}<extra></extra>")
-    fig.add_vline(x=pd.Timestamp(sel), line_width=1, line_color="#9a9ea8")
+    fig.add_vline(x=pd.Timestamp(sel), line_width=1, line_color=NEUTRAL)
     fig.update_layout(**layout(xaxis=date_axis(d0, d1, 6), yaxis={"title": {"text": ytitle}, "ticksuffix": suffix}))
     return fig
 
@@ -710,10 +713,10 @@ def fig_growth(dd: pd.DataFrame, growth: dict, sel: date) -> go.Figure:
                            marker=dict(color=[POS if g >= 0 else NEG for _, g, _ in pts], cornerradius=3),
                            customdata=[[fdate(d, weekday=True), len(h)] for d, _, h in pts],
                            hovertemplate="<b>%{customdata[0]}</b><br>%{y:+.1f} % vs. día anterior<br>%{customdata[1]} h comparadas<extra></extra>"))
-    fig.add_vline(x=pd.Timestamp(sel), line_width=1, line_color="#9a9ea8")
+    fig.add_vline(x=pd.Timestamp(sel), line_width=1, line_color=NEUTRAL)
     fig.update_layout(**layout(bargap=0.3, xaxis=date_axis(d0, d1, 6),
                                yaxis={"title": {"text": "Variación (%)"}, "ticksuffix": " %", "zeroline": True,
-                                      "zerolinecolor": "#9a9ea8", "zerolinewidth": 1}))
+                                      "zerolinecolor": NEUTRAL, "zerolinewidth": 1}))
     return fig
 
 
@@ -733,18 +736,18 @@ def fig_ego(repo: str, eg: dict) -> go.Figure:
     for u in users:
         ex += [0, u["x"], None]
         ey += [0, u["y"], None]
-    fig.add_scatter(x=ex, y=ey, mode="lines", line=dict(color="#d9dbe0", width=1), hoverinfo="skip", showlegend=False)
+    fig.add_scatter(x=ex, y=ey, mode="lines", line=dict(color="#dccdb3", width=1), hoverinfo="skip", showlegend=False)
     for t in order:
         grp = [u for u in users if u["main"] == t]
         if not grp:
             continue
         # leyenda aparte: Plotly usaría el símbolo del primer punto (rombo si es bot)
-        fig.add_scatter(x=[None], y=[None], mode="markers", name=REL_ES[t], marker=dict(size=10, color=REL_COLOR[t]))
+        fig.add_scatter(x=[None], y=[None], mode="markers", name=REL_ES[t], marker=dict(size=10, color=REL_COLOR[t], opacity=FILL_ALPHA))
         fig.add_scatter(
             x=[u["x"] for u in grp], y=[u["y"] for u in grp], mode="markers", name=REL_ES[t], showlegend=False,
-            marker=dict(size=[9 + 13 * math.sqrt((u["total"] or 0) / top) for u in grp], color=REL_COLOR[t],
+            marker=dict(size=[9 + 13 * math.sqrt((u["total"] or 0) / top) for u in grp], color=REL_COLOR[t], opacity=FILL_ALPHA,
                         symbol=["diamond" if u["usuario"].endswith("[bot]") else "circle" for u in grp],
-                        line=dict(color="#ffffff", width=1.5)),
+                        line=dict(color=BG, width=1.5)),
             customdata=[[u["usuario"], " · ".join(f"{REL_ES.get(r['tipo'], r['tipo'])} ×{r['veces']:,}" for r in u["rels"])]
                         for u in grp],
             hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>")
@@ -753,9 +756,9 @@ def fig_ego(repo: str, eg: dict) -> go.Figure:
                     textposition=["middle right" if u["x"] >= 0 else "middle left" for u in lab],
                     textfont=dict(size=11, color=INK2), hoverinfo="skip", showlegend=False)
     fig.add_scatter(x=[None], y=[None], mode="markers", name="Cuenta automatizada ([bot])",
-                    marker=dict(symbol="diamond", size=10, color="#9a9ea8"))
+                    marker=dict(symbol="diamond", size=10, color=NEUTRAL))
     fig.add_scatter(x=[0], y=[0], mode="markers+text", text=[f"<b>{repo}</b>"], textposition="bottom center", textfont=dict(size=12, color=INK),
-                    marker=dict(size=28, color=DB_COLOR["Neo4j"], line=dict(color="#ffffff", width=2)), showlegend=False,
+                    marker=dict(size=28, color=DB_COLOR["Neo4j"], line=dict(color=BG, width=2)), showlegend=False,
                     hovertemplate=f"<b>{repo}</b><br>{eg['deg']:,} usuarios distintos<extra></extra>")
     fig.update_layout(**layout(showlegend=True, hovermode="closest", margin=dict(l=4, r=4, t=8, b=4),
                                xaxis={"visible": False, "range": [-1.75, 1.75]},
@@ -998,7 +1001,7 @@ with tab_c:
     day = hourly[hourly["event_date"] == sel]
     left, right = st.columns([3, 2], gap="large")
     with left:
-        fig_head("Gráfico 1", "Eventos por hora y tipo de evento", f"{fdate(sel, weekday=True)} · horas en UTC · los 5 tipos principales del día")
+        fig_head("Gráfico 1", "Eventos por hora y tipo de evento", f"{fdate(sel, weekday=True)} · horas en UTC · los {MAIN_TYPES} tipos principales del día")
         fig, info = fig_hourly(day, hrs)
         show(fig, 420, "g1")
         reading = (f"Hora pico: {info['peak']:02d} h ({info['peak_v']:,} eventos); hora valle: {info['low']:02d} h "
@@ -1251,13 +1254,13 @@ with tab_doc:
 
     section("Arquitectura y flujo de datos", "DAG <code>github_events_pipeline</code> de Apache Airflow, programado cada hora. "
             "Cada etapa lee la salida de la anterior: la arquitectura es por capas.")
-    steps = [("Fuente", "GH Archive", "Un archivo JSON comprimido por hora con los eventos públicos de GitHub.", "#9a9ea8"),
-             ("Etapas 1-2", "Extracción y limpieza", "Descarga; campos obligatorios, fecha ISO-8601, deduplicación por id y payload recortado.", "#9a9ea8"),
+    steps = [("Fuente", "GH Archive", "Un archivo JSON comprimido por hora con los eventos públicos de GitHub.", NEUTRAL),
+             ("Etapas 1-2", "Extracción y limpieza", "Descarga; campos obligatorios, fecha ISO-8601, deduplicación por id y payload recortado.", NEUTRAL),
              ("Etapa 3", "MongoDB", "Colección <code>events</code>: el documento original de cada evento.", DB_COLOR["MongoDB"]),
              ("Etapa 4", "Cassandra", "Lee MongoDB y escribe agregados por hora y día e interacciones usuario→repositorio.", DB_COLOR["Cassandra"]),
              ("Etapa 5", "Neo4j", "Lee <code>user_repo_interactions_by_hour</code> y fusiona Usuario→Repositorio→Organización.", DB_COLOR["Neo4j"]),
-             ("Etapa 6", "Indicadores", "Cinco KPI (al menos uno por base de datos) guardados en <code>kpis_by_date</code>.", "#9a9ea8"),
-             ("Consumo", "Dashboard", "Streamlit consulta las tres bases de datos.", "#9a9ea8")]
+             ("Etapa 6", "Indicadores", "Cinco KPI (al menos uno por base de datos) guardados en <code>kpis_by_date</code>.", NEUTRAL),
+             ("Consumo", "Dashboard", "Streamlit consulta las tres bases de datos.", NEUTRAL)]
     st.html('<div class="flow">' + '<span class="ar">→</span>'.join(
         f'<div class="st" style="--c:{c}"><div class="k">{k}</div><div class="t">{t}</div><div class="d">{d}</div></div>'
         for k, t, d, c in steps) + "</div>")
