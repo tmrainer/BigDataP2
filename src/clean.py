@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -113,11 +114,15 @@ def clean_events(events: Iterable[dict], max_events: int = MAX_EVENTS_PER_RUN) -
 def write_processed(events: list[dict], source_file: str, dest_dir: Path = PROCESSED_DIR) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / source_file.replace(".json.gz", ".clean.jsonl")
-    with open(dest, "w", encoding="utf-8") as f:
+    # Escritura atómica (tmp + os.replace): si el archivo lo creó otro usuario (p. ej. jupyter uid 1000 y
+    # Airflow uid 50000 comparten data/), sobrescribirlo daría PermissionError; reemplazarlo no.
+    tmp = dest.with_name(dest.name + f".{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         for ev in events:
             row = dict(ev)
             row["created_at"] = row["created_at"].isoformat()
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    os.replace(tmp, dest)
     return dest
 
 
