@@ -4,7 +4,7 @@ del evento de GitHub como _id y upserts en lote (bulk_write), así re-ejecutar
 una hora no duplica datos.
 
 Retención opcional (MONGO_RETENTION_HOURS > 0): después de cargar, se eliminan los documentos
-cuyo created_at sea anterior a (hora del lote - MONGO_RETENTION_HOURS). Se mide
+cuyo created_at sea anterior a (hora del lote - MONGO_RETENTION_HOURS), sin tocar el día en curso. Se mide
 en tiempo de evento, no en reloj, así que con la VM apagada no se pierde nada.
 El histórico agregado queda en Cassandra; MongoDB conserva la ventana reciente
 de documentos originales.
@@ -44,7 +44,9 @@ def purge_old_events(reference_hour: datetime, retention_hours: int = MONGO_RETE
     """Borra documentos con created_at < reference_hour - retention_hours. Devuelve cuántos."""
     if retention_hours <= 0:
         return 0
-    cutoff = reference_hour - timedelta(hours=retention_hours)
+    # nunca se recorta el día en curso: la etapa 4 recalcula los agregados diarios desde aquí
+    cutoff = min(reference_hour - timedelta(hours=retention_hours),
+                 reference_hour.replace(hour=0, minute=0, second=0, microsecond=0))
     res = mongo_db().events.delete_many({"created_at": {"$lt": cutoff}})
     if res.deleted_count:
         log.info("Retención Mongo: %d documentos anteriores a %s eliminados", res.deleted_count, cutoff.isoformat())

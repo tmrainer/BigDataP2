@@ -12,7 +12,7 @@ Uso (dentro del contenedor jupyter, con src/ en PYTHONPATH):
 
 Idempotente: una hora con fila en pipeline_runs y loaded_neo4j > 0 se salta; una hora a medias
 se reintenta (cada etapa decide por sí sola qué omitir). Los días se procesan en paralelo, las
-horas de un mismo día siempre en secuencia (los agregados diarios de Cassandra hacen lee-suma-escribe).
+horas de un mismo día siempre en secuencia (los agregados diarios se recalculan con lo cargado hasta esa hora).
 Airflow sigue encargándose del presente: este script es solo para el pasado.
 """
 from __future__ import annotations
