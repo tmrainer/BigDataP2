@@ -16,6 +16,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config  # noqa: E402
+from kpis import INTERMITTENT_TYPES  # noqa: E402
 
 # ------------------------------------------------------------------ estilo
 SERIES = ["#d9691e", "#6b3e24", "#e0a526", "#3f8a84", "#b23a2a", "#6b7329", "#c49a6c", "#8a4f6d"]
@@ -66,21 +67,25 @@ KPI_DEF = [
          symbols="<i>n<sub>D,h,t</sub></i>: eventos del tipo <i>t</i> en la hora <i>h</i> del día <i>D</i> (una fila de "
                  "<code>events_by_hour</code>). <i>H<sub>D</sub></i>: horas cargadas del día.",
          reading="Volumen de actividad ingerido; base de los demás indicadores. Solo es comparable entre días con las mismas "
-                 "horas cargadas: en un día parcial conviene mirar el promedio por hora.",
+                 "horas cargadas y la misma cobertura de Push: para comparar días conviene mirar los tipos estables "
+                 "(sin Push ni creación o borrado de ramas, que GH Archive 2026 entrega de forma intermitente).",
          lang="sql", impl="SELECT event_hour, event_type, event_count\nFROM events_by_hour\nWHERE event_date = '{d}';\n"
                           "-- E_D = suma de event_count de toda la partición"),
     dict(no=2, key="daily_growth_pct", name="Crecimiento diario", db="Cassandra", table="events_by_hour",
          long="Crecimiento diario de eventos", question="¿La actividad sube o baja respecto del día anterior?",
-         definition="Variación porcentual del volumen respecto del día anterior, sobre las horas cargadas en ambos días.",
-         formula="(E_D(H) − E_D−1(H)) / E_D−1(H) × 100,  H = horas presentes en D y D−1",
-         tex=r"\begin{gathered} G_D \;=\; \frac{E_D(H) - E_{D-1}(H)}{E_{D-1}(H)} \times 100 \\[2pt] H = H_D \cap H_{D-1} \end{gathered}",
-         symbols="<i>E<sub>D</sub>(H)</i>: eventos del día <i>D</i> sumando solo las horas de <i>H</i>, el conjunto de horas "
-                 "cargadas en ambos días. Sin datos del día anterior el indicador no se calcula (N/D).",
-         reading="G &gt; 0: la actividad crece; G &lt; 0: disminuye. Variaciones muy grandes suelen reflejar cambios de "
-                 "cobertura del feed de GH Archive más que cambios reales de actividad.",
-         lang="sql", impl="SELECT event_hour, event_count FROM events_by_hour WHERE event_date = '{d}';\n"
-                          "SELECT event_hour, event_count FROM events_by_hour WHERE event_date = '{d1}';\n"
-                          "-- se suman solo las horas presentes en ambas particiones"),
+         definition="Variación porcentual, respecto del día anterior, del volumen de tipos estables (todos menos Push y "
+                    "creación o borrado de ramas), sobre las horas cargadas en ambos días.",
+         formula="(S_D(H) − S_D−1(H)) / S_D−1(H) × 100,  S = tipos estables, H = horas presentes en D y D−1",
+         tex=r"\begin{gathered} G_D \;=\; \frac{S_D(H) - S_{D-1}(H)}{S_{D-1}(H)} \times 100 \\[2pt] H = H_D \cap H_{D-1} \end{gathered}",
+         symbols="<i>S<sub>D</sub>(H)</i>: eventos de tipos estables del día <i>D</i> sumando solo las horas de <i>H</i>, el "
+                 "conjunto de horas cargadas en ambos días. Se excluyen Push, creación y borrado de ramas porque GH Archive 2026 "
+                 "los entrega de forma intermitente. Sin datos del día anterior el indicador no se calcula (N/D).",
+         reading="G &gt; 0: la actividad crece; G &lt; 0: disminuye. Al excluir los tipos intermitentes, un hueco de cobertura "
+                 "del feed de GH Archive no se lee como una caída o subida de actividad.",
+         lang="sql", impl="SELECT event_hour, event_type, event_count FROM events_by_hour WHERE event_date = '{d}';\n"
+                          "SELECT event_hour, event_type, event_count FROM events_by_hour WHERE event_date = '{d1}';\n"
+                          "-- se suman las horas presentes en ambas particiones,\n"
+                          "-- sin PushEvent, CreateEvent ni DeleteEvent"),
     dict(no=3, key="avg_events_per_user", name="Eventos por usuario", db="Cassandra", table="daily_totals",
          long="Promedio de actividad por usuario", question="¿Con qué intensidad participa cada usuario activo?",
          definition="Promedio de eventos por usuario activo (actor distinto) en el día.",
@@ -105,15 +110,16 @@ KPI_DEF = [
                                  '  { $group: { _id: "$payload.action", n: { $sum: 1 } } }\n])'),
     dict(no=5, key="top_repo_connections", name="Repositorio más conectado", db="Neo4j", table="(:User)-[]->(:Repo)",
          long="Repositorio con mayor número de conexiones", question="¿Qué proyecto concentra más comunidad?",
-         definition="Repositorio con más usuarios distintos conectados (grado del nodo) en el grafo acumulado.",
-         formula="MATCH (u:User)-[]->(r:Repo) RETURN r, count(DISTINCT u) ORDER BY 2 DESC LIMIT 1",
-         tex=r"\begin{gathered} r^{*} \;=\; \arg\max_{r} \; \deg(r) \\[2pt] \deg(r) = \left|\{\, u : (u) \rightarrow (r) \,\}\right| \end{gathered}",
-         symbols="<i>deg(r)</i>: usuarios distintos con al menos una relación (Push, PR, issue, estrella o fork) hacia el "
-                 "repositorio <i>r</i>, contados en el grafo acumulado de todas las fechas cargadas.",
+         definition="Repositorio con más usuarios distintos conectados (grado del nodo) en el grafo acumulado hasta el final del día.",
+         formula="MATCH (u:User)-[x]->(r:Repo) WHERE x.first_seen < fin(D) RETURN r, count(DISTINCT u) ORDER BY 2 DESC LIMIT 1",
+         tex=r"\begin{gathered} r^{*}_D \;=\; \arg\max_{r} \; \deg_D(r) \\[2pt] \deg_D(r) = \left|\{\, u : (u) \rightarrow (r),\; t_{u,r} \le D \,\}\right| \end{gathered}",
+         symbols="<i>deg<sub>D</sub>(r)</i>: usuarios distintos con al menos una relación (Push, PR, issue, estrella o fork) hacia "
+                 "el repositorio <i>r</i> cuya primera interacción (<i>t<sub>u,r</sub></i>, propiedad <code>first_seen</code>) "
+                 "ocurrió hasta el día <i>D</i>.",
          reading="Proyecto que concentra comunidad. Un grado anómalo, o un vecindario dominado por estrellas o cuentas "
                  "automatizadas, puede delatar actividad artificial.",
-         lang="cypher", impl="MATCH (u:User)-[]->(r:Repo)\nRETURN r.name AS repositorio, count(DISTINCT u) AS grado\n"
-                             "ORDER BY grado DESC LIMIT 1"),
+         lang="cypher", impl="MATCH (u:User)-[x]->(r:Repo)\nWHERE x.first_seen < datetime('{dn}T00:00:00Z')\n"
+                             "RETURN r.name AS repositorio, count(DISTINCT u) AS grado\nORDER BY grado DESC LIMIT 1"),
 ]
 
 LAYOUT = dict(
@@ -449,9 +455,16 @@ def daily() -> pd.DataFrame:
     if df.empty:
         return df
     df["event_date"] = df["event_date"].map(lambda d: d.date())
-    hours = hourly_all().groupby("event_date")["event_hour"].agg(lambda s: tuple(sorted(set(s))))
+    h = hourly_all()
+    hours = h.groupby("event_date")["event_hour"].agg(lambda s: tuple(sorted(set(s))))
     df["hours"] = df["event_date"].map(lambda d: hours.get(d, ()))
     df["n_hours"] = df["hours"].map(len)
+    # tipos estables y cobertura de Push: GH Archive 2026 entrega Push/Create/Delete de forma intermitente
+    stable = h[~h["event_type"].isin(INTERMITTENT_TYPES)].groupby("event_date")["event_count"].sum()
+    push = h[(h["event_type"] == "PushEvent") & (h["event_count"] > 0)].groupby("event_date")["event_hour"].agg(
+        lambda s: tuple(sorted(set(s))))
+    df["stable"] = df["event_date"].map(lambda d: int(stable.get(d, 0)))
+    df["push_hours"] = df["event_date"].map(lambda d: push.get(d, ()))
     return df.fillna(0).sort_values("event_date").reset_index(drop=True)
 
 
@@ -466,8 +479,14 @@ def kpis_all() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def stable_hourly() -> pd.DataFrame:
+    h = hourly_all()
+    return h.assign(event_count=h["event_count"].where(~h["event_type"].isin(INTERMITTENT_TYPES), 0))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def growth_all() -> dict:
-    by_day = {d: g.groupby("event_hour")["event_count"].sum() for d, g in hourly_all().groupby("event_date")}
+    by_day = {d: g.groupby("event_hour")["event_count"].sum() for d, g in stable_hourly().groupby("event_date")}
     out = {}
     for d, cur in by_day.items():
         prev = by_day.get(d - timedelta(days=1))
@@ -675,6 +694,10 @@ def fig_daily(dd: pd.DataFrame, sel: date) -> go.Figure:
                                 zip(part["event_date"], part["n_hours"], part["total_events"], part["unique_users"], part["unique_repos"])],
                     hovertemplate=hover, text=[f"{n} h" if n < 24 else "" for n in part["n_hours"]], textposition="outside",
                     textfont=dict(size=11, color=MUTED), cliponaxis=False)
+    fig.add_scatter(x=pd.to_datetime(dd["event_date"]), y=dd["stable"], mode="lines+markers", name="Tipos estables (sin Push ni ramas)",
+                    line=dict(color=INK, width=2), marker=dict(size=6, color=INK, line=dict(color=BG, width=1.5)),
+                    customdata=[fdate(d, weekday=True) for d in dd["event_date"]],
+                    hovertemplate="<b>%{customdata}</b><br>%{y:,} eventos de tipos estables<extra></extra>")
     srow = dd[dd["event_date"] == sel]
     if not srow.empty:
         pos = (sel - d0).days / max(1, (d1 - d0).days)
@@ -843,7 +866,8 @@ tiles = []
 ev = kval("events_per_day")
 badge = '<span class="badge ok">Día completo</span>' if len(hrs) == 24 else f'<span class="badge warn">Parcial · {len(hrs)}/24 h</span>'
 tiles.append(kpi_tile(K["events_per_day"], "—" if ev is None else f"{ev:,.0f}",
-                      badge + (f"<br>≈ {ev / len(hrs):,.0f} eventos por hora cargada." if ev and hrs else "")))
+                      badge + (f"<br>≈ {ev / len(hrs):,.0f} eventos por hora cargada." if ev and hrs else "")
+                      + f"<br>Tipos estables: {int(day_row['stable']):,} · Push en {len(day_row['push_hours'])} de {len(hrs)} h."))
 
 g_live, common = growth.get(sel, (None, ()))
 g_stored, prev = kval("daily_growth_pct"), sel - timedelta(days=1)
@@ -852,7 +876,7 @@ if g_live is None:
                           f"Sin datos del {fdate(prev, weekday=True)} para comparar."))
 else:
     arrow, cls = ("▲", "up") if g_live >= 0 else ("▼", "down")
-    ctx = f'vs. {fdate(prev, weekday=True, year=False)}, mismas {len(common)} h <span class="nw">({hours_label(common)})</span>.'
+    ctx = f'Tipos estables vs. {fdate(prev, weekday=True, year=False)}, mismas {len(common)} h <span class="nw">({hours_label(common)})</span>.'
     if g_stored is None or abs(g_stored - g_live) > 0.05:
         ctx += (' <span class="badge" title="El valor guardado en kpis_by_date se calculó antes de completarse la carga del '
                 'día anterior; se muestra el recalculado con los datos actuales (scripts/recompute_kpis.py lo actualiza).">recalculado</span>')
@@ -873,7 +897,7 @@ tiles.append(kpi_tile(K["pr_merge_rate_pct"], "—" if v4 is None else f"{v4:.1f
 r5, d5 = klabel("top_repo_connections"), kval("top_repo_connections")
 if r5 and d5 is not None:
     c5 = krow["computed_at"].get("top_repo_connections")
-    ctx5 = f"{d5:,.0f} usuarios distintos conectados en el grafo acumulado al {fdate(c5.date(), year=False)}, {c5:%H:%M} UTC."
+    ctx5 = f"{d5:,.0f} usuarios distintos conectados en el grafo acumulado hasta el {fdate(sel, year=False)}."
     try:
         live = degree_of((r5,)).get(r5)
         if live and live != int(d5):
@@ -918,21 +942,25 @@ with tab_k:
                        f"por hora en los días completos. El total crecerá cuando se carguen las {24 - n_h} horas faltantes.")
         else:
             applied = f"Se procesaron {ev:,.0f} eventos en {n_h} horas."
+        st_n, push_n = int(day_row["stable"]), len(day_row["push_hours"])
+        applied += (f" De ellos, {st_n:,} ({st_n / ev * 100:.0f} %) son de tipos estables; el resto son Push y creación o borrado "
+                    f"de ramas, que el feed trajo en {push_n} de {n_h} horas." if ev else "")
     kpi_section(K["events_per_day"], sel, calc, "", applied, "Evolución en el periodo",
                 lambda: show(fig_trend(dd, dict(zip(dd["event_date"], dd["total_events"])), sel, "Eventos por día", ",.0f"), 230, "k1"))
 
     if g_live is None:
         calc, note, applied = None, "", f"No se calcula: no hay datos del {fdate(prev, weekday=True)}."
     else:
-        hsum = hourly[hourly["event_date"].isin([sel, prev])].groupby(["event_date", "event_hour"])["event_count"].sum()
+        hsum = stable_hourly()
+        hsum = hsum[hsum["event_date"].isin([sel, prev])].groupby(["event_date", "event_hour"])["event_count"].sum()
         a = int(sum(hsum.get((sel, h), 0) for h in common))
         b = int(sum(hsum.get((prev, h), 0) for h in common))
         calc = rf"G_D = \frac{{{tnum(a)} - {tnum(b)}}}{{{tnum(b)}}} \times 100 = {g_live:+.1f}\,\%"
-        note = f"<i>H</i>: {len(common)} horas presentes en ambos días ({hours_label(common)})."
-        applied = (f"La actividad {'creció' if g_live >= 0 else 'cayó'} un {abs(g_live):.1f} % frente al {fdate(prev, weekday=True)} "
-                   f"en las mismas {len(common)} horas.")
+        note = f"<i>H</i>: {len(common)} horas presentes en ambos días ({hours_label(common)}). Solo tipos estables."
+        applied = (f"La actividad de tipos estables {'creció' if g_live >= 0 else 'cayó'} un {abs(g_live):.1f} % frente al "
+                   f"{fdate(prev, weekday=True)} en las mismas {len(common)} horas.")
         if abs(g_live) >= 50:
-            applied += " Una variación de esta magnitud suele reflejar cambios de cobertura del feed (ver horas atípicas en el Gráfico 1)."
+            applied += " Una variación de esta magnitud suele reflejar una captura incompleta del feed (ver horas atípicas en el Gráfico 1)."
         if g_stored is None or abs(g_stored - g_live) > 0.05:
             applied += " El valor guardado en <code>kpis_by_date</code> está desactualizado; se muestra el recalculado."
     kpi_section(K["daily_growth_pct"], sel, calc, note, applied, "Evolución en el periodo",
@@ -973,9 +1001,9 @@ with tab_k:
     if not (r5 and d5 is not None):
         calc, note, applied = None, "", "El indicador aún no se calculó para esta fecha."
     else:
-        calc = rf"r^{{*}} = \texttt{{{tex_escape(r5)}}}, \qquad \deg(r^{{*}}) = {tnum(d5)}"
-        note = f"Valor guardado al calcularse el indicador ({fdt(c5)}); el grafo crece con cada carga."
-        applied = f"<b>{esc(r5)}</b> reunía {d5:,.0f} usuarios distintos al calcularse el indicador."
+        calc = rf"r^{{*}}_D = \texttt{{{tex_escape(r5)}}}, \qquad \deg_D(r^{{*}}_D) = {tnum(d5)}"
+        note = f"Grafo acumulado hasta el final del {fdate(sel)} (calculado el {fdt(c5)})."
+        applied = f"<b>{esc(r5)}</b> reunía {d5:,.0f} usuarios distintos al cierre del {fdate(sel, weekday=True, year=False)}."
         try:
             eg5 = ego(r5)
             applied += (f" Hoy el grafo le asigna {eg5['deg']:,} usuarios, de los cuales {eg5['bots']:,} son cuentas automatizadas. "
@@ -1009,6 +1037,10 @@ with tab_c:
         if info.get("atypical"):
             reading += (f" Las horas marcadas con ▼ ({', '.join(f'{h:02d} h' for h in info['atypical'])}) tienen menos del 25 % "
                         "del volumen mediano del día: suele indicar una captura incompleta del feed de GH Archive, no una caída real.")
+        ph = day_row["push_hours"]
+        if 0 < len(ph) < len(hrs):
+            reading += (f" El feed trae Push solo en {len(ph)} de {len(hrs)} horas ({hours_label(ph)}): el salto de volumen entre "
+                        "horas es de cobertura, no de actividad.")
         fig_note(reading, "Cassandra · <code>events_by_hour</code> (partición <code>event_date</code>).")
     with right:
         fig_head("Gráfico 2", "Composición del día por tipo de evento", "porcentaje del total y número de eventos")
@@ -1023,14 +1055,16 @@ with tab_c:
             fig_note(reading, "Cassandra · <code>events_by_hour</code>. Colores fijos por tipo, iguales en ambos gráficos.")
 
     section("Evolución diaria", "Todas las fechas cargadas. Las barras claras son días parciales y llevan encima las horas "
-            "cargadas; los fines de semana van sombreados.")
+            "cargadas; los fines de semana van sombreados. La línea es la serie comparable entre días (tipos estables).")
     fig_head("Gráfico 3", "Eventos procesados por día", f"{fdate(first_d)} – {fdate(last_d)}")
     show(fig_daily(dd, sel), 360, "g3")
     if len(full_days):
         lo, hi = full_days.loc[full_days["total_events"].idxmin()], full_days.loc[full_days["total_events"].idxmax()]
         reading = (f"Días completos: promedio de {full_days['total_events'].mean():,.0f} eventos por día; mínimo el "
                    f"{fdate(lo['event_date'])} ({lo['total_events']:,}) y máximo el {fdate(hi['event_date'])} ({hi['total_events']:,}). "
-                   "El volumen depende también de la cobertura del feed de GH Archive, que varía en 2026.")
+                   f"La línea muestra solo los tipos estables: {full_days['stable'].mean():,.0f} por día en promedio, entre "
+                   f"{full_days['stable'].min():,} y {full_days['stable'].max():,}. La diferencia con las barras son Push y creación o "
+                   "borrado de ramas, que GH Archive entrega de forma intermitente en 2026: el volumen total depende de esa cobertura.")
     else:
         reading = "Aún no hay días completos: todas las barras corresponden a días parciales."
     fig_note(reading, "Cassandra · <code>daily_totals</code> (totales) y <code>events_by_hour</code> (horas cargadas).")
@@ -1131,8 +1165,8 @@ with tab_g:
                 note = (f"{gt['repo'].iloc[0]} encabeza el ranking con {gt['usuarios'].iloc[0]:,} usuarios distintos (KPI 5 calculado "
                         "en vivo). La barra resaltada es el repositorio explorado abajo.")
                 if r5 and d5 is not None and (r5 != gt["repo"].iloc[0] or int(d5) != int(gt["usuarios"].iloc[0])):
-                    note += (f" El KPI 5 guardado para el {fdate(sel, year=False)} ({esc(r5)}, {d5:,.0f} usuarios) refleja el grafo en el "
-                             "momento del cálculo; el grafo crece con cada carga.")
+                    note += (f" El KPI 5 del {fdate(sel, year=False)} ({esc(r5)}, {d5:,.0f} usuarios) corresponde al grafo "
+                             "acumulado hasta esa fecha.")
                 fig_note(note, "Neo4j · grado por repositorio.")
         if not gt.empty:
             eg = ego(repo)
@@ -1201,7 +1235,7 @@ with tab_m:
                           customdata=[k for k, _ in ordered]), 34 * len(ordered) + 24, "g10")
                 merged, closed = acts.get("merged", 0), acts.get("closed", 0)
                 if merged + closed:
-                    fig_note(f"Las barras azules forman el KPI 4: {merged:,} / ({merged:,} + {closed:,}) = "
+                    fig_note(f"Las barras resaltadas forman el KPI 4: {merged:,} / ({merged:,} + {closed:,}) = "
                              f"<b>{merged / (merged + closed) * 100:.1f} %</b>. Las demás acciones (abrir, etiquetar, asignar) no cierran "
                              "un PR y no intervienen.", "MongoDB · <code>events</code> (agregación sobre <code>payload.action</code>).")
             else:
@@ -1242,13 +1276,14 @@ with tab_doc:
                      "clean": None if a is None else a["clean"],
                      "desc": None if a is None else a["raw"] - a["clean"],
                      "mongo": None if a is None else a["mongo"], "neo": None if a is None else a["neo"],
+                     "push": f"{len(dd.set_index('event_date').at[d, 'push_hours'])}/{n}",
                      "users": int(dd.set_index("event_date").at[d, "unique_users"])})
     st.html(table_html(pd.DataFrame(rows), [("fecha", "Fecha", "nw"), ("horas", "Horas con datos", "html"), ("estado", "Estado", "html"),
-                                            ("clean", "Eventos válidos", "int"), ("desc", "Descartados", "int"),
+                                            ("push", "Horas con Push", "nw"), ("clean", "Eventos válidos", "int"), ("desc", "Descartados", "int"),
                                             ("mongo", "Insertados en MongoDB", "int"), ("neo", "Aristas Neo4j", "int"),
                                             ("users", "Usuarios activos", "int")])
             + '<div class="tnote">Descartados = eventos crudos que no superan la validación (campos obligatorios, fecha ISO-8601, '
-              "id duplicado). Insertados en MongoDB = documentos nuevos de cada corrida: al reintentar una hora los documentos ya "
+              "id duplicado). Horas con Push = horas cargadas en las que el feed trae eventos Push. Insertados en MongoDB = documentos nuevos de cada corrida: al reintentar una hora los documentos ya "
               "existentes no se duplican, por eso puede ser menor que los eventos válidos (la conciliación exacta está en la "
               "pestaña MongoDB). Aristas Neo4j = relaciones usuario→repositorio fusionadas en el grafo durante esas horas.</div>")
 
@@ -1278,9 +1313,14 @@ with tab_doc:
 <li>Todas las fechas y horas están en UTC (Lima = UTC−5): un «día» va de 00:00 a 23:59 UTC.</li>
 <li>Un día es <b>parcial</b> si tiene menos de 24 horas cargadas (día en curso o carga histórica incompleta). Sus totales no son
 comparables con los de días completos; el KPI 2 compara solo las horas presentes en ambos días.</li>
+<li><b>Tipos estables</b> son todos menos Push y creación o borrado de ramas. GH Archive 2026 entrega esos tres tipos de forma
+intermitente (aparecen y desaparecen juntos), así que el volumen total de un día depende de cuántas horas los traen. El KPI 2 se
+calcula solo sobre tipos estables y el Gráfico 3 los muestra como línea: es la serie comparable entre días.</li>
 <li>El volumen del feed de GH Archive en 2026 cambia de forma abrupta entre horas (p. ej., de ~80 mil a ~7 mil eventos por hora) y
 algunos tipos (Push, creación y borrado de ramas) aparecen de forma intermitente: esas variaciones vienen de la fuente y no
 necesariamente de la actividad real en GitHub.</li>
+<li>El KPI 5 de cada fecha usa el grafo acumulado hasta el final de ese día (relaciones con <code>first_seen</code> anterior);
+las consultas de la pestaña Neo4j muestran el grafo completo.</li>
 <li>El grafo de Neo4j es acumulado y, para acotar su tamaño, cada hora incorpora solo los {config.NEO4J_TOP_REPOS:,} repositorios y
 {config.NEO4J_TOP_USERS:,} usuarios más activos; únicamente cinco tipos de evento generan relaciones.</li>
 <li>GH Archive registra eventos, no estados: «estrellas» o «forks» son los recibidos en el periodo, no el total histórico del repositorio.</li>
