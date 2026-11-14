@@ -74,7 +74,7 @@ Los cuatro índices secundarios responden a consultas concretas del sistema (Tab
 
 \subsection{Colección \texttt{ingestion\_log}}
 
-Registra, por cada archivo de origen, las estadísticas de calidad de la corrida (eventos crudos, válidos, duplicados, rechazados y motivos) y el resultado de la carga. Tiene un índice único sobre \texttt{source\_file} y al corte contiene 985 documentos, uno por hora.
+Registra, por cada archivo de origen, las estadísticas de calidad de la corrida (eventos crudos, válidos, duplicados, rechazados y motivos) y el resultado de la carga. Tiene un índice único sobre \texttt{source\_file} y al corte contiene 1,056 documentos, uno por hora.
 
 \subsection{Carga}
 
@@ -92,14 +92,14 @@ La etapa 3 (\repo{src/load_mongo.py}{src/load\_mongo.py}) escribe en lotes de 2,
 \toprule
 \textbf{Métrica} & \textbf{Valor} \\
 \midrule
-Documentos                         & 31,244,224 \\
+Documentos                         & 31,614,290 \\
 Tamaño medio del documento         & 263 bytes \\
-Tamaño lógico de los datos         & 8.2 GB \\
+Tamaño lógico de los datos         & 8.3 GB \\
 Tamaño en disco (comprimido)       & 3.3 GB \\
 Tamaño de los índices              & 2.6 GB \\
-Volumen Docker total               & 6.1 GB \\
+Volumen Docker total               & 6.2 GB \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-La compresión de WiredTiger reduce los datos a un 40\,\% de su tamaño lógico. Los cuatro índices secundarios, en cambio, ocupan casi tanto como los datos: es el costo de poder consultar 31 millones de documentos por fecha, tipo, repositorio y usuario sin recorrer la colección.
+La compresión de WiredTiger reduce los datos a un 40\,\% de su tamaño lógico. Los cuatro índices secundarios, en cambio, ocupan casi tanto como los datos: es el costo de poder consultar 31.6 millones de documentos por fecha, tipo, repositorio y usuario sin recorrer la colección.

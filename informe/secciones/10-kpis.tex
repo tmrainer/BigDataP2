@@ -15,10 +15,10 @@ Se definieron cinco indicadores, con la condición de que \textbf{cada base de d
 \textbf{KPI} & \textbf{Indicador} & \textbf{Base de datos} & \textbf{Fuente} & \textbf{Valor (12 oct)} \\
 \midrule
 1 & Eventos procesados por día       & Cassandra & \texttt{events\_by\_hour}          & 1,981,972 \\
-2 & Crecimiento diario de eventos    & Cassandra & \texttt{events\_by\_hour}          & $+17.9$\,\% \\
+2 & Crecimiento diario (flujo estable) & Cassandra & \texttt{events\_by\_hour}          & $-14.0$\,\% \\
 3 & Actividad por usuario & Cassandra & \texttt{daily\_totals}            & 4.07 \\
 4 & Tasa de fusión de PR & MongoDB & \texttt{payload.action}       & 93.8\,\% \\
-5 & Repositorio más conectado        & Neo4j     & grado de \texttt{:Repo}       & 6,720 usuarios \\
+5 & Repositorio más conectado        & Neo4j     & grado de \texttt{:Repo}       & 2,034 usuarios \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -36,31 +36,32 @@ E_D \;=\; \sum_{h \,\in\, H_D} \; \sum_{t} \; n_{D,h,t}
 \]
 donde $n_{D,h,t}$ es el número de eventos del tipo $t$ en la hora $h$ del día $D$ (una fila de \texttt{events\_by\_hour}) y $H_D$ es el conjunto de horas cargadas de ese día.
 
-\paragraph{Interpretación.} Mide el volumen de actividad ingerido y es la base de los demás indicadores. Solo es comparable entre días con las mismas horas cargadas y, como se mostró en la Sección~\ref{subsec:cobertura}, entre días con la misma cobertura de la fuente.
+\paragraph{Interpretación.} Mide el volumen de actividad ingerido y es la base de los demás indicadores. Solo es comparable entre días con las mismas horas cargadas y, como se mostró en la Sección~\ref{subsec:cobertura}, entre días con la misma cobertura de la fuente. Por eso la etapa 6 guarda junto al valor dos datos de contexto, que el \textit{dashboard} muestra en la tarjeta del indicador: los eventos del flujo estable y el número de horas del día que traen \textit{push}.
 
-\paragraph{Valor.} $E_D = 1{,}981{,}972$ eventos el 12 de octubre, un 154\,\% por encima de la media de los 40 días completos (778,986).
+\paragraph{Valor.} $E_D = 1{,}981{,}972$ eventos el 12 de octubre, un 176\,\% por encima de la media de los 44 días completos (718,507). De ellos, 71,580 pertenecen al flujo estable, y el flujo de referencias de Git estuvo presente en las 24 horas.
 
 \captura{dash-kpi1.png}{Ficha del KPI 1 en el \textit{dashboard}: definición, fórmula, cálculo para la fecha, lectura y evolución en el periodo.}
 
 % ------------------------------------------------------------------ KPI 2
 \subsection{KPI 2: Crecimiento Diario de Eventos}
 
-\paragraph{Definición.} Variación porcentual del volumen de eventos respecto al día anterior, calculada sobre las horas cargadas en ambos días.
+\paragraph{Definición.} Variación porcentual, respecto al día anterior, del volumen de eventos del \textbf{flujo estable} (todos los tipos excepto \texttt{PushEvent}, \texttt{CreateEvent} y \texttt{DeleteEvent}), calculada sobre las horas cargadas en ambos días.
 
 \paragraph{Fórmula.}
 \[
-G_D \;=\; \frac{E_D(H) - E_{D-1}(H)}{E_{D-1}(H)} \times 100,
+G_D \;=\; \frac{S_D(H) - S_{D-1}(H)}{S_{D-1}(H)} \times 100,
+\qquad S_D(H) \;=\; \sum_{h \,\in\, H} \; \sum_{t \,\notin\, I} n_{D,h,t},
 \qquad H \;=\; H_D \cap H_{D-1}
 \]
-donde $E_D(H)$ son los eventos del día $D$ sumando únicamente las horas de $H$. Si no hay datos del día anterior, el indicador no se calcula.
+donde $I$ es el conjunto de los tres tipos intermitentes y $S_D(H)$ son los eventos del flujo estable del día $D$ sumando únicamente las horas de $H$. Si no hay datos del día anterior, el indicador no se calcula.
 
-\paragraph{Interpretación.} $G_D > 0$ indica que la actividad crece y $G_D < 0$ que disminuye. Variaciones de gran magnitud reflejan cambios de cobertura de la fuente antes que cambios reales de actividad.
+\paragraph{Interpretación.} $G_D > 0$ indica que la actividad de colaboración crece y $G_D < 0$ que disminuye. Al excluir los tipos intermitentes, un hueco de cobertura de la fuente no se lee como una caída ni como una subida de actividad.
 
-\paragraph{Valor.} $G_D = (1{,}981{,}972 - 1{,}680{,}871) / 1{,}680{,}871 \times 100 = +17.9$\,\% frente al domingo 11 de octubre, sobre las mismas 24 horas.
+\paragraph{Valor.} $G_D = (71{,}580 - 83{,}258) / 83{,}258 \times 100 = -14.0$\,\% frente al domingo 11 de octubre, sobre las mismas 24 horas. Con todos los tipos, ese mismo día habría marcado $+17.9$\,\%: el volumen total subió porque la fuente entregó más \textit{pushes}, mientras la actividad de colaboración bajaba.
 
-\paragraph{Decisión de diseño.} La primera versión comparaba totales diarios. Durante la carga, un día a medio procesar aparecía con variaciones ficticias de más de 100 puntos, y el primer día del periodo mostraba un engañoso 0\,\%. Restringir la comparación a las horas comunes y dejar el valor nulo cuando no hay día previo eliminó ambos artefactos: un día en curso con 2 horas cargadas se compara contra las mismas 2 horas del día anterior.
+\paragraph{Decisión de diseño.} El indicador pasó por dos correcciones. La primera versión comparaba totales diarios: un día a medio procesar aparecía con variaciones ficticias de más de 100 puntos, y el primer día del periodo mostraba un engañoso 0\,\%. Restringir la comparación a las horas comunes y dejar el valor nulo cuando no hay día previo eliminó ambos artefactos. La segunda corrección responde al hallazgo de la Sección~\ref{subsec:cobertura}. Con todos los tipos de evento, el indicador oscilaba entre $-92.6$\,\% y $+448.4$\,\%, y sus extremos coincidían con los días en que el flujo de referencias de Git aparecía o desaparecía de la fuente: el 7 de octubre marcaba $-89.2$\,\% cuando el flujo estable de ese día en realidad creció un 34.4\,\%, y el 25 de octubre marcaba $+169.5$\,\% con el flujo estable cayendo un 18.8\,\%. Calculado sobre el flujo estable, el indicador se mueve entre $-44.5$\,\% y $+57.4$\,\% en todo el periodo. Como Cassandra conserva los conteos por hora y tipo, el cambio no exigió recargar datos: los indicadores de los 44 días se recalcularon con \repo{scripts/recompute_kpis.py}{scripts/recompute\_kpis.py}.
 
-\captura{dash-kpi2.png}{Ficha del KPI 2. Las barras de mayor magnitud coinciden con los días en que el flujo de referencias de Git aparece o desaparece de la fuente.}
+\captura{dash-kpi2.png}{Ficha del KPI 2. Al calcularse sobre el flujo estable, la serie ya no reproduce los escalones de cobertura de la fuente.}
 
 % ------------------------------------------------------------------ KPI 3
 \subsection{KPI 3: Promedio de Actividad por Usuario}
@@ -92,7 +93,7 @@ donde $F_D$ es el número de eventos \texttt{PullRequestEvent} del día con \tex
 
 \paragraph{Interpretación.} Indica qué proporción del trabajo que se somete a revisión termina aceptada; es una medida de la salud del flujo de contribución.
 
-\paragraph{Valor.} $T_D = 8{,}314 / (8{,}314 + 545) \times 100 = 93.8$\,\%. En todo el periodo se mantiene entre 88.8\,\% y 94.7\,\%, con media de 93.3\,\%.
+\paragraph{Valor.} $T_D = 8{,}314 / (8{,}314 + 545) \times 100 = 93.8$\,\%. En todo el periodo se mantiene entre 88.8\,\% y 94.9\,\%, con media de 93.4\,\%.
 
 \paragraph{Por qué MongoDB.} Es el único indicador que requiere un campo del \texttt{payload}. Cassandra solo conserva conteos por tipo de evento y no distingue un \textit{pull request} abierto de uno fusionado. La agregación se apoya en el índice \texttt{ix\_type\_date}:
 
@@ -110,20 +111,27 @@ db.events.aggregate([
 % ------------------------------------------------------------------ KPI 5
 \subsection{KPI 5: Repositorio con Mayor Número de Conexiones}
 
-\paragraph{Definición.} Repositorio con más usuarios distintos conectados en el grafo acumulado, es decir, el nodo \texttt{Repo} de mayor grado de entrada.
+\paragraph{Definición.} Repositorio con más usuarios distintos conectados en el grafo acumulado hasta el final del día $D$, es decir, el nodo \texttt{Repo} de mayor grado de entrada considerando solo las relaciones cuya primera interacción ocurrió hasta ese día.
 
 \paragraph{Fórmula.}
 \[
-r^{*} \;=\; \arg\max_{r} \; \deg(r),
+r^{*}_D \;=\; \arg\max_{r} \; \deg_D(r),
 \qquad
-\deg(r) \;=\; \bigl|\{\, u : (u) \rightarrow (r) \,\}\bigr|
+\deg_D(r) \;=\; \bigl|\{\, u : (u) \rightarrow (r),\; t_{u,r} \le D \,\}\bigr|
 \]
-donde $\deg(r)$ cuenta los usuarios distintos con al menos una relación (\textit{push}, \textit{pull request}, \textit{issue}, estrella o \textit{fork}) hacia el repositorio $r$.
+donde $\deg_D(r)$ cuenta los usuarios distintos con al menos una relación (\textit{push}, \textit{pull request}, \textit{issue}, estrella o \textit{fork}) hacia el repositorio $r$, y $t_{u,r}$ es la fecha de la primera interacción del usuario con el repositorio (propiedad \texttt{first\_seen} de la relación).
 
 \paragraph{Interpretación.} Señala el proyecto que más comunidad concentra. Un grado anómalo, o un vecindario dominado por un solo tipo de relación, puede indicar popularidad puntual o actividad artificial en lugar de colaboración.
 
-\paragraph{Valor.} $r^{*} = \texttt{morluto/rea}$, con $\deg(r^{*}) = 6{,}720$ usuarios. Como se analizó en la Sección~\ref{sec:neo4j}, el 82\,\% de esas conexiones son únicamente estrellas.
+\paragraph{Valor.} $r^{*}_D = \texttt{morluto/rea}$, con $\deg_D(r^{*}_D) = 2{,}034$ usuarios al cierre del 12 de octubre. El indicador cambia con la fecha: el 1 de octubre el repositorio más conectado era \texttt{NousResearch/hermes-agent} (34 usuarios); del 2 al 6, \texttt{eternity4719/HowToLiveBetter} (199 al cierre del día 6); el 7 y el 8, \texttt{storytold/photocraft} (456); y desde el 9 de octubre, \texttt{morluto/rea}, que al corte reúne 6,843 usuarios. Como se analizó en la Sección~\ref{sec:neo4j}, el 82\,\% de esas conexiones son únicamente estrellas.
 
-\paragraph{Limitación.} A diferencia de los otros cuatro, este indicador no depende de la fecha: el grafo es acumulado y la consulta recorre todas las relaciones, por lo que su valor es el mismo para cualquier día consultado. Una versión por fecha exigiría filtrar las relaciones por \texttt{first\_seen}, propiedad que el modelo ya almacena.
+\begin{lstlisting}[style=plano]
+MATCH (u:User)-[x]->(r:Repo)
+WHERE x.first_seen < datetime('2026-10-13T00:00:00Z')
+RETURN r.name AS repo, count(DISTINCT u) AS degree
+ORDER BY degree DESC, repo LIMIT 1
+\end{lstlisting}
 
-\captura{dash-kpi5.png}{Ficha del KPI 5, con el ranking actual del grafo consultado en vivo.}
+\paragraph{Decisión de diseño y limitación.} En la primera versión el indicador no dependía de la fecha: la consulta recorría el grafo completo y devolvía el mismo valor para cualquier día. El filtro por \texttt{first\_seen}, propiedad que el modelo ya almacenaba, lo hizo comparable con los otros cuatro sin modificar el grafo. La limitación que subsiste es que \texttt{first\_seen} se fija al crear la relación con la fecha de la hora que se está cargando: si las horas no se cargan en orden cronológico (la carga histórica admite procesar varios días en paralelo), una relación puede quedar fechada después de su primera aparición real y el grado de las fechas intermedias, subestimado. El valor al corte no se ve afectado.
+
+\captura{dash-kpi5.png}{Ficha del KPI 5: valor para la fecha elegida y, a la derecha, el ranking actual del grafo consultado en vivo.}

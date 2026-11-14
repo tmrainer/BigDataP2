@@ -34,19 +34,19 @@ Neo4j es la capa de \textbf{relaciones}. El grafo representa quién interactúa 
 \toprule
 \textbf{Elemento} & \textbf{Tipo} & \textbf{Propiedades / origen} & \textbf{Cantidad} \\
 \midrule
-\texttt{:User}          & Nodo     & \texttt{login} (único)                            & 1,397,745 \\
-\texttt{:Repo}          & Nodo     & \texttt{name} (único), \texttt{owner}             & 1,815,622 \\
-\texttt{:Org}           & Nodo     & \texttt{login} (único)                            &   123,979 \\
+\texttt{:User}          & Nodo     & \texttt{login} (único)                            & 1,451,903 \\
+\texttt{:Repo}          & Nodo     & \texttt{name} (único), \texttt{owner}             & 1,887,722 \\
+\texttt{:Org}           & Nodo     & \texttt{login} (único)                            &   129,068 \\
 \midrule
-\texttt{PUSHED}         & Relación & \texttt{PushEvent}                                & 1,500,922 \\
-\texttt{OPENED\_PR}     & Relación & \texttt{PullRequestEvent}                         &   606,893 \\
-\texttt{STARRED}        & Relación & \texttt{WatchEvent}                               &   197,442 \\
-\texttt{OPENED\_ISSUE}  & Relación & \texttt{IssuesEvent}                              &   161,658 \\
-\texttt{FORKED}         & Relación & \texttt{ForkEvent}                                &    33,319 \\
-\texttt{BELONGS\_TO}    & Relación & campo \texttt{org} del evento                     &   275,401 \\
+\texttt{PUSHED}         & Relación & \texttt{PushEvent}                                & 1,531,945 \\
+\texttt{OPENED\_PR}     & Relación & \texttt{PullRequestEvent}                         &   654,560 \\
+\texttt{STARRED}        & Relación & \texttt{WatchEvent}                               &   216,598 \\
+\texttt{OPENED\_ISSUE}  & Relación & \texttt{IssuesEvent}                              &   175,188 \\
+\texttt{FORKED}         & Relación & \texttt{ForkEvent}                                &    35,979 \\
+\texttt{BELONGS\_TO}    & Relación & campo \texttt{org} del evento                     &   288,987 \\
 \midrule
-\multicolumn{3}{@{}l}{\textbf{Total de nodos}}      & \textbf{3,337,346} \\
-\multicolumn{3}{@{}l}{\textbf{Total de relaciones}} & \textbf{2,775,635} \\
+\multicolumn{3}{@{}l}{\textbf{Total de nodos}}      & \textbf{3,468,693} \\
+\multicolumn{3}{@{}l}{\textbf{Total de relaciones}} & \textbf{2,903,257} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -54,7 +54,7 @@ Neo4j es la capa de \textbf{relaciones}. El grafo representa quién interactúa 
 Tres decisiones definen el modelo:
 
 \begin{itemize}[leftmargin=*]
-    \item \textbf{La relación agrega, no enumera.} Entre un usuario y un repositorio existe a lo sumo una relación de cada tipo, con la propiedad \texttt{count} acumulando cuántas veces ocurrió y \texttt{first\_seen}/\texttt{last\_seen} delimitando el periodo. Los 12.0 millones de \textit{pushes} con relación en el grafo se condensan así en 1.5 millones de aristas \texttt{PUSHED}. Modelar una arista por evento multiplicaría el tamaño del grafo sin aportar nada a las preguntas de conectividad.
+    \item \textbf{La relación agrega, no enumera.} Entre un usuario y un repositorio existe a lo sumo una relación de cada tipo, con la propiedad \texttt{count} acumulando cuántas veces ocurrió y \texttt{first\_seen}/\texttt{last\_seen} delimitando el periodo. Los 12.1 millones de \textit{pushes} con relación en el grafo se condensan así en 1.5 millones de aristas \texttt{PUSHED}. Modelar una arista por evento multiplicaría el tamaño del grafo sin aportar nada a las preguntas de conectividad.
     \item \textbf{El tipo de acción es el tipo de la relación.} Usar \texttt{PUSHED}, \texttt{STARRED}, etc.\ como tipos, en lugar de una relación genérica con una propiedad \texttt{tipo}, permite filtrar por tipo durante el recorrido sin leer propiedades.
     \item \textbf{Solo cinco tipos de evento generan relaciones.} Son los que expresan un vínculo directo de un usuario con un repositorio. Comentarios, revisiones y borrados no crean aristas.
 \end{itemize}
@@ -95,7 +95,7 @@ MERGE (u)-[rel:PUSHED]->(r)
 
 \subsection{Consultas de Grafo}
 
-Las dos consultas siguientes ilustran por qué este dato reside en Neo4j. La primera calcula el KPI~5; la segunda encuentra a los usuarios que comparten repositorios con uno dado, un recorrido de dos saltos.
+Las dos consultas siguientes ilustran por qué este dato reside en Neo4j. La primera es la base del KPI~5, que le añade un filtro por fecha sobre \texttt{first\_seen} (Sección~\ref{sec:kpis}); la segunda encuentra a los usuarios que comparten repositorios con uno dado, un recorrido de dos saltos.
 
 \begin{lstlisting}[style=plano]
 // Repositorios con más usuarios distintos conectados (grado del nodo)
@@ -120,11 +120,11 @@ ORDER BY repos_en_comun DESC LIMIT 5;
 \toprule
 \textbf{Repositorio} & \textbf{Usuarios distintos conectados} \\
 \midrule
-\texttt{morluto/rea}                     & 6,720 \\
-\texttt{storytold/photocraft}            & 1,461 \\
-\texttt{Ebony-Vinyl/dsh-our-free-model}  & 1,095 \\
-\texttt{boykopovar/AnyPS5}               & 1,006 \\
-\texttt{debpalash/VoiceStudio}           &   810 \\
+\texttt{morluto/rea}                     & 6,843 \\
+\texttt{storytold/photocraft}            & 1,483 \\
+\texttt{Ebony-Vinyl/dsh-our-free-model}  & 1,148 \\
+\texttt{boykopovar/AnyPS5}               & 1,025 \\
+\texttt{debpalash/VoiceStudio}           &   842 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -141,13 +141,13 @@ El primer repositorio cuadruplica al segundo. El grafo permite ir más allá del
 \toprule
 \textbf{Tipo de relación} & \textbf{Relaciones} & \textbf{Interacciones (\texttt{count})} \\
 \midrule
-\texttt{STARRED}       & 5,522 & 5,524 \\
-\texttt{FORKED}        & 1,141 & 1,141 \\
-\texttt{OPENED\_PR}    &    57 &   137 \\
+\texttt{STARRED}       & 5,628 & 5,630 \\
+\texttt{FORKED}        & 1,156 & 1,156 \\
+\texttt{OPENED\_PR}    &    58 &   143 \\
 \texttt{OPENED\_ISSUE} &    26 &   173 \\
 \texttt{PUSHED}        &     7 &   410 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-El 82\,\% de los usuarios conectados (5,502) tiene como única relación una estrella, y la actividad de código se reduce a 7 cuentas que hicieron \textit{push}. Un grado alto no implica por sí solo una comunidad de colaboradores: aquí describe popularidad, no colaboración, y esa distinción solo es visible al examinar el tipo de las relaciones. El vecindario se explora de forma interactiva en el \textit{dashboard} (Figura~\ref{fig:dash-neo4j-vecindario}).
+El 82\,\% de los usuarios conectados (5,608) tiene como única relación una estrella, y la actividad de código se reduce a 7 cuentas que hicieron \textit{push}. Un grado alto no implica por sí solo una comunidad de colaboradores: aquí describe popularidad, no colaboración, y esa distinción solo es visible al examinar el tipo de las relaciones. El vecindario se explora de forma interactiva en el \textit{dashboard} (Figura~\ref{fig:dash-neo4j-vecindario}).
