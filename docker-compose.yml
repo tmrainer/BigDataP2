@@ -8,6 +8,7 @@
 ##   jupyter       exploración + notebooks CRUD (demo del video)
 ##   dashboard     Streamlit conectado a las 3 BDs
 ##   mongo-express UI web de MongoDB (opcional, para la demo)
+##   cassandra-web UI web de Cassandra (opcional, para la demo)
 ##
 ## Uso:
 ##   cp .env.example .env
@@ -113,6 +114,20 @@ services:
       timeout: 10s
       retries: 15
       start_period: 60s
+    restart: unless-stopped
+
+  cassandra-web:
+    image: ipushc/cassandra-web:v1.1.6
+    container_name: cassandra-web
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      READ_ONLY: "true"       # solo consulta: el CRUD se demuestra desde los notebooks
+    ports:
+      - "127.0.0.1:8083:8083"
+    depends_on:
+      cassandra:
+        condition: service_healthy
     restart: unless-stopped
 
   # -------------------------------------------------------------------- Neo4j

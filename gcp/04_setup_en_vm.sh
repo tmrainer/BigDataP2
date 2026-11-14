@@ -48,4 +48,5 @@ echo "  Airflow   http://localhost:8080  (admin/admin)  -> DAG github_events_pip
 echo "  Jupyter   http://localhost:8888  (token: $(grep JUPYTER_TOKEN .env | cut -d= -f2))"
 echo "  Neo4j     http://localhost:7474  (neo4j / $(grep NEO4J_PASSWORD .env | cut -d= -f2))"
 echo "  Mongo UI  http://localhost:8081"
+echo "  Cassandra UI http://localhost:8083/#/main"
 echo "  Dashboard http://localhost:8501  o http://$(curl -s -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip):8501"

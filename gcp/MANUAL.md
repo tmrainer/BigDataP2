@@ -60,7 +60,7 @@ Opciones, de más simple a más cómoda:
 * **Cloud Shell con túnel** y "Vista previa en la web" (un puerto a la vez):
   `gcloud compute ssh bigdata-vm --zone us-central1-a -- -L 8080:localhost:8080`
 * **Laptop con gcloud instalado** (cloud.google.com/sdk, `gcloud auth login` una vez): el mismo
-  comando con todos los `-L` (8080 Airflow, 8888 Jupyter, 7474 Neo4j, 8081 Mongo Express, 8501
+  comando con todos los `-L` (8080 Airflow, 8888 Jupyter, 7474 Neo4j, 8081 Mongo Express, 8083 Cassandra Web, 8501
   dashboard). Es lo que hace `02_tunel_ssh.sh`. Recomendado para grabar el video.
 
 Dentro de la VM:
