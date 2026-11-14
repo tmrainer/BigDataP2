@@ -36,6 +36,8 @@ MERGE (r:Repo {name: row.repo})
 MERGE (u)-[rel:%s]->(r)
   ON CREATE SET rel.count = row.n, rel.first_seen = datetime(row.ts), rel.last_seen = datetime(row.ts)
   ON MATCH  SET rel.count = coalesce(rel.count, 0) + row.n,
+                rel.first_seen = CASE WHEN rel.first_seen IS NULL OR datetime(row.ts) < rel.first_seen
+                                      THEN datetime(row.ts) ELSE rel.first_seen END,
                 rel.last_seen = CASE WHEN datetime(row.ts) > coalesce(rel.last_seen, rel.first_seen)
                                      THEN datetime(row.ts) ELSE coalesce(rel.last_seen, rel.first_seen) END
 """
