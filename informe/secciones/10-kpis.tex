@@ -18,7 +18,7 @@ Se definieron cinco indicadores, con la condición de que \textbf{cada base de d
 2 & Crecimiento diario (flujo estable) & Cassandra & \texttt{events\_by\_hour}          & $-14.0$\,\% \\
 3 & Actividad por usuario & Cassandra & \texttt{daily\_totals}            & 4.07 \\
 4 & Tasa de fusión de PR & MongoDB & \texttt{payload.action}       & 93.8\,\% \\
-5 & Repositorio más conectado        & Neo4j     & grado de \texttt{:Repo}       & 2,034 usuarios \\
+5 & Repositorio más conectado        & Neo4j     & grado de \texttt{:Repo}       & 2,035 usuarios \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -123,7 +123,7 @@ donde $\deg_D(r)$ cuenta los usuarios distintos con al menos una relación (\tex
 
 \paragraph{Interpretación.} Señala el proyecto que más comunidad concentra. Un grado anómalo, o un vecindario dominado por un solo tipo de relación, puede indicar popularidad puntual o actividad artificial en lugar de colaboración.
 
-\paragraph{Valor.} $r^{*}_D = \texttt{morluto/rea}$, con $\deg_D(r^{*}_D) = 2{,}034$ usuarios al cierre del 12 de octubre. El indicador cambia con la fecha: el 1 de octubre el repositorio más conectado era \texttt{NousResearch/hermes-agent} (34 usuarios); del 2 al 6, \texttt{eternity4719/HowToLiveBetter} (199 al cierre del día 6); el 7 y el 8, \texttt{storytold/photocraft} (456); y desde el 9 de octubre, \texttt{morluto/rea}, que al corte reúne 6,843 usuarios. Como se analizó en la Sección~\ref{sec:neo4j}, el 82\,\% de esas conexiones son únicamente estrellas.
+\paragraph{Valor.} $r^{*}_D = \texttt{morluto/rea}$, con $\deg_D(r^{*}_D) = 2{,}035$ usuarios al cierre del 12 de octubre. El indicador cambia con la fecha: el 1 y el 2 de octubre el repositorio más conectado era \texttt{PostHog/posthog} (48 y 65 usuarios); del 3 al 6, \texttt{eternity4719/HowToLiveBetter} (199 al cierre del día 6); el 7 y el 8, \texttt{storytold/photocraft} (456); y desde el 9 de octubre, \texttt{morluto/rea}, que al corte reúne 6,843 usuarios. Como se analizó en la Sección~\ref{sec:neo4j}, el 82\,\% de esas conexiones son únicamente estrellas.
 
 \begin{lstlisting}[style=plano]
 MATCH (u:User)-[x]->(r:Repo)
@@ -132,6 +132,6 @@ RETURN r.name AS repo, count(DISTINCT u) AS degree
 ORDER BY degree DESC, repo LIMIT 1
 \end{lstlisting}
 
-\paragraph{Decisión de diseño y limitación.} En la primera versión el indicador no dependía de la fecha: la consulta recorría el grafo completo y devolvía el mismo valor para cualquier día. El filtro por \texttt{first\_seen}, propiedad que el modelo ya almacenaba, lo hizo comparable con los otros cuatro sin modificar el grafo. La limitación que subsiste es que \texttt{first\_seen} se fija al crear la relación con la fecha de la hora que se está cargando: si las horas no se cargan en orden cronológico (la carga histórica admite procesar varios días en paralelo), una relación puede quedar fechada después de su primera aparición real y el grado de las fechas intermedias, subestimado. El valor al corte no se ve afectado.
+\paragraph{Decisión de diseño y corrección.} En la primera versión el indicador no dependía de la fecha: la consulta recorría el grafo completo y devolvía el mismo valor para cualquier día. El filtro por \texttt{first\_seen}, propiedad que el modelo ya almacenaba, lo hizo comparable con los otros cuatro sin modificar el grafo. Ese filtro dejó al descubierto una limitación: \texttt{first\_seen} se fijaba al crear la relación, con la fecha de la hora que se estaba cargando, de modo que si las horas no se cargaban en orden cronológico (la carga histórica procesa varios días en paralelo) una relación podía quedar fechada después de su primera aparición real, y el grado de las fechas intermedias, subestimado. Se corrigió en dos pasos. La etapa 5 conserva ahora en \texttt{first\_seen} la menor de las fechas observadas (Sección~\ref{sec:neo4j}), con lo que el indicador ya no depende del orden de carga. Y el grafo existente se reparó el 14 de noviembre con \repo{scripts/fix_first_seen.py}{scripts/fix\_first\_seen.py}, que recorre las interacciones de Cassandra hora por hora y adelantó la fecha de 201,754 relaciones sin alterar contadores ni nodos. Al recalcular los indicadores cambió el KPI~5 de 36 de las 44 fechas. El efecto fue pequeño salvo al inicio del periodo: el 1 y el 2 de octubre el repositorio más conectado pasó a ser \texttt{PostHog/posthog}, con 48 y 65 usuarios, donde antes figuraban otros repositorios con 34 y 62; en las demás fechas el repositorio no cambió y su grado subió entre 1 y 3 usuarios. Del 10 al 13 de noviembre el indicador quedó igual, de modo que el valor al corte no se vio afectado.
 
-\captura{dash-kpi5.png}{Ficha del KPI 5: valor para la fecha elegida y, a la derecha, el ranking actual del grafo consultado en vivo.}
+\captura{dash-kpi5.png}{Ficha del KPI 5: valor para la fecha elegida y, a la derecha, el ranking actual del grafo consultado en vivo. La captura es del 14 de noviembre, posterior a la corrección de \texttt{first\_seen}; el ranking en vivo incluye las horas cargadas después del corte.}

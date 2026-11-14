@@ -103,3 +103,14 @@ Volumen Docker total               & 6.2 GB \\
 \end{table}
 
 La compresión de WiredTiger reduce los datos a un 40\,\% de su tamaño lógico. Los cuatro índices secundarios, en cambio, ocupan casi tanto como los datos: es el costo de poder consultar 31.6 millones de documentos por fecha, tipo, repositorio y usuario sin recorrer la colección.
+
+\subsection{Inspección Directa con Mongo Express}
+
+Además del \textit{dashboard}, el contenido de la base puede revisarse sin intermediarios con Mongo Express, el explorador web que acompaña a MongoDB en el \textit{stack} y que solo es accesible por túnel SSH. La Figura~\ref{fig:db-mongo-express} muestra la colección \texttt{events} tal como está almacenada: cada fila es un documento, con el \texttt{\_id} heredado de GitHub, el subdocumento \texttt{actor} y un \texttt{payload} cuya forma cambia según el tipo de evento.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.93\textwidth]{db-mongo-express.png}
+    \caption{Colección \texttt{events} en Mongo Express, capturada el 14 de noviembre. El contador indica 31,634,165 documentos: los 31,614,290 del corte más los de las horas que el DAG siguió incorporando después. Los dos documentos visibles son \textit{pull requests} con \texttt{payload.action} distinto (\texttt{opened} y \texttt{closed}), el campo que usa el KPI~4.}
+    \label{fig:db-mongo-express}
+\end{figure}

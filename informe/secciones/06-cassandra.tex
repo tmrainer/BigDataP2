@@ -86,13 +86,26 @@ CREATE TABLE daily_totals (
 La etapa 4 (\repo{src/load_cassandra.py}{src/load\_cassandra.py}) lee de MongoDB los eventos de la hora, los agrega en memoria y los escribe con sentencias preparadas y 64 peticiones concurrentes. El tratamiento difiere según la granularidad de la tabla:
 
 \begin{itemize}[leftmargin=*]
-    \item Las tablas \textbf{por hora} (\texttt{events\_by\_hour}, interacciones) reciben un \texttt{INSERT} directo: cada hora se procesa una sola vez y sobrescribir es seguro.
-    \item Las tablas \textbf{por día} (repositorios y usuarios) deben acumular las 24 corridas del día, de modo que se actualizan leyendo el valor existente, sumando y reescribiendo.
+    \item Las tablas \textbf{por hora} (\texttt{events\_by\_hour}, interacciones) reciben un \texttt{INSERT} directo: la hora forma parte de la clave, de modo que reescribir una hora deja el mismo valor.
+    \item Las tablas \textbf{por día} (repositorios y usuarios) deben reflejar las 24 corridas del día, pero no acumulan de una corrida a otra: para los repositorios y usuarios presentes en la hora, la etapa recalcula en MongoDB el total del día (una agregación \texttt{\$group} sobre el índice de \texttt{created\_at}) y escribe ese valor absoluto.
     \item \texttt{daily\_totals} se \textbf{recalcula} desde las tablas del día en cada corrida, por lo que es exacto y no arrastra errores de acumulación.
 \end{itemize}
 
-Para que un reintento de Airflow o una ejecución manual no sume dos veces, antes de agregar se consulta \texttt{pipeline\_runs}: si la hora ya tiene fila, la etapa se omite. La limitación de este esquema está identificada: si la escritura falla a mitad de una hora, antes de registrar la fila, el reintento puede acumular dos veces la parte ya escrita en las tablas diarias. No se observó ese caso durante la operación; sí se observó, en cambio, el de dos planificadores procesando la misma hora a la vez, que este registro resolvió sin duplicar conteos (Sección~\ref{subsec:composer}). La corrección prevista para la limitación es borrar el día afectado y recargarlo desde MongoDB, que conserva el dato original.
+Como todas las escrituras son valores absolutos, la etapa es \textbf{idempotente por construcción}: repetir una hora, sea por un reintento de Airflow, por una escritura interrumpida a la mitad o por dos planificadores activos a la vez, deja el mismo resultado. La tabla \texttt{pipeline\_runs} sigue registrando las horas procesadas, y la etapa se omite si la hora ya figura en ella, pero ese registro solo evita rehacer el trabajo: ya no es lo que protege los conteos.
+
+\paragraph{Cambio respecto de la primera versión.} Inicialmente las tablas diarias se actualizaban leyendo el valor existente, sumando y reescribiendo, y la idempotencia descansaba únicamente en \texttt{pipeline\_runs}. Ese esquema tenía una limitación identificada: si la escritura fallaba a mitad de una hora, antes de registrar la fila, el reintento podía acumular dos veces la parte ya escrita. El caso no llegó a observarse durante la operación, pero el recálculo desde MongoDB lo elimina. El cambio se validó el 14 de noviembre sobre los datos ya cargados: para cinco horas de días distintos, incluidos los de mayor volumen, el total recalculado coincidió con el valor acumulado en las 53,860 filas de repositorios y las 41,967 de usuarios comparadas, y reescribir dos veces una hora ya procesada (las 15:00 UTC del 12 de noviembre) dejó idénticas las cinco tablas. El costo es una lectura adicional de MongoDB por corrida: alrededor de un segundo en un día típico y unos 22 segundos en los días de mayor volumen, que superan el millón de eventos.
 
 \subsection{Tamaño}
 
 Al corte, \texttt{pipeline\_runs} tiene 1,056 filas (una por hora procesada), \texttt{events\_by\_hour} 14,933, \texttt{daily\_totals} 44 (una por día) y \texttt{kpis\_by\_date} 220 (cinco indicadores por día). El volumen Docker de Cassandra ocupa 1.7~GB. Según \texttt{nodetool tablestats}, el espacio vivo se concentra en tres tablas: \texttt{user\_repo\_\bk{}interactions\_\bk{}by\_hour} (973~MB), \texttt{repo\_activity\_by\_day} (467~MB) y \texttt{user\_activity\_by\_day} (181~MB). Las cuatro tablas que alimentan los gráficos temporales y los indicadores suman menos de 1~MB: el dato que el tablero lee con más frecuencia es también el más pequeño.
+
+\subsection{Inspección Directa con Cassandra Web}
+
+Las tablas se consultan también desde Cassandra Web, un explorador de solo lectura incluido en el \textit{stack} y accesible por túnel SSH. La Figura~\ref{fig:db-cassandra-web} muestra el espacio de claves \texttt{github\_metrics} con sus siete tablas y las filas de \texttt{daily\_totals}, que llegan ya ordenadas de la fecha más reciente a la más antigua por el orden de agrupamiento definido en la tabla.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.93\textwidth]{db-cassandra-web.png}
+    \caption{Tabla \texttt{daily\_totals} en Cassandra Web, capturada el 14 de noviembre. Cada fila resume un día: eventos, repositorios y usuarios distintos. La primera corresponde al día en curso, todavía parcial; las siguientes, a los últimos días completos del periodo.}
+    \label{fig:db-cassandra-web}
+\end{figure}

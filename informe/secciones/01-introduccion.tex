@@ -13,7 +13,7 @@ El trabajo se estructura siguiendo los entregables solicitados:
     \item \textbf{Problema y arquitectura:} qué preguntas se busca responder y por qué cada tipo de dato reside en una base distinta (Secciones~\ref{sec:problema} y~\ref{sec:arquitectura}).
     \item \textbf{Dataset:} origen, estructura, volumen, mecanismo de actualización incremental y calidad de los datos (Sección~\ref{sec:dataset}).
     \item \textbf{Modelos de datos:} colección y validador de MongoDB, siete tablas de Cassandra diseñadas por consulta y grafo de propiedades en Neo4j (Secciones~\ref{sec:mongodb} a~\ref{sec:neo4j}).
-    \item \textbf{Automatización:} DAG de Airflow de seis etapas con ejecución horaria e idempotencia (Sección~\ref{sec:airflow}).
+    \item \textbf{Automatización:} DAG de Airflow de seis etapas con ejecución horaria, idempotencia y recuperación automática de horas faltantes (Sección~\ref{sec:airflow}).
     \item \textbf{Operaciones CRUD} sobre las tres bases de datos (Sección~\ref{sec:crud}).
     \item \textbf{Indicadores y \textit{dashboard}:} cinco KPI con definición, fórmula e interpretación, y las capturas del tablero (Secciones~\ref{sec:kpis} y~\ref{sec:dashboard}).
 \end{enumerate}

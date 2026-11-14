@@ -83,6 +83,8 @@ MERGE (u)-[rel:PUSHED]->(r)
   ON CREATE SET rel.count = row.n,
                 rel.first_seen = datetime(row.ts), rel.last_seen = datetime(row.ts)
   ON MATCH  SET rel.count = coalesce(rel.count, 0) + row.n,
+                rel.first_seen = CASE WHEN datetime(row.ts) < rel.first_seen
+                                      THEN datetime(row.ts) ELSE rel.first_seen END,
                 rel.last_seen = CASE WHEN datetime(row.ts) > rel.last_seen
                                      THEN datetime(row.ts) ELSE rel.last_seen END
 \end{lstlisting}
@@ -90,6 +92,8 @@ MERGE (u)-[rel:PUSHED]->(r)
 \paragraph{Control de tamaño.} En cada hora solo entran al grafo los 10,000 repositorios y los 20,000 usuarios más activos de esa hora (parámetros \texttt{NEO4J\_TOP\_REPOS} y \texttt{NEO4J\_TOP\_USERS}). El grafo es, por tanto, una muestra sesgada hacia la actividad más intensa, lo que se declara en la metodología del \textit{dashboard}.
 
 \paragraph{Idempotencia.} \texttt{MERGE} evita duplicar nodos y aristas, pero no evita sumar dos veces el \texttt{count}. Por eso la etapa consulta antes la columna \texttt{loaded\_neo4j} de \texttt{pipeline\_runs}: si la hora ya fue cargada en el grafo, se omite.
+
+\paragraph{Fechas independientes del orden de carga.} Al reencontrar una relación, la consulta conserva en \texttt{first\_seen} la menor de las fechas observadas y en \texttt{last\_seen} la mayor. Ambas propiedades describen así la actividad real aunque las horas se carguen desordenadas, como ocurre en la carga histórica en paralelo o al reponer una hora atrasada. De ello depende el KPI~5, que filtra por \texttt{first\_seen} (Sección~\ref{sec:kpis}).
 
 \paragraph{Reconstrucción.} Como el grafo se deriva íntegramente de Cassandra, puede regenerarse desde cero con \repo{scripts/rebuild_neo4j.py}{scripts/rebuild\_neo4j.py} sin volver a descargar ni a procesar los archivos de origen. Es la consecuencia práctica de la arquitectura por capas.
 
@@ -151,3 +155,20 @@ El primer repositorio cuadruplica al segundo. El grafo permite ir más allá del
 \end{table}
 
 El 82\,\% de los usuarios conectados (5,608) tiene como única relación una estrella, y la actividad de código se reduce a 7 cuentas que hicieron \textit{push}. Un grado alto no implica por sí solo una comunidad de colaboradores: aquí describe popularidad, no colaboración, y esa distinción solo es visible al examinar el tipo de las relaciones. El vecindario se explora de forma interactiva en el \textit{dashboard} (Figura~\ref{fig:dash-neo4j-vecindario}).
+
+\subsection{Inspección Directa con Neo4j Browser}
+
+El grafo puede recorrerse con Neo4j Browser, la interfaz incluida en la imagen de Neo4j, accesible por túnel SSH. La Figura~\ref{fig:db-neo4j-browser} muestra a la izquierda el resumen de la base (etiquetas de nodo, tipos de relación y propiedades) y a la derecha el resultado de una consulta que parte de una organización, pasa por sus repositorios y llega a los usuarios que interactuaron con ellos:
+
+\begin{lstlisting}[style=plano]
+MATCH (o:Org {login:'NousResearch'})<-[b:BELONGS_TO]-(r:Repo)
+      <-[x]-(u:User)
+RETURN o,b,r,x,u LIMIT 60
+\end{lstlisting}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.93\textwidth]{db-neo4j-browser.png}
+    \caption{Neo4j Browser, capturado el 14 de noviembre: 3,474,053 nodos y 2,909,199 relaciones en la base. El resultado contiene las tres etiquetas del modelo (una organización, 9 repositorios y 56 usuarios) y los seis tipos de relación; el repositorio de la izquierda concentra la mayor parte de las relaciones.}
+    \label{fig:db-neo4j-browser}
+\end{figure}

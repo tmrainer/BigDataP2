@@ -129,7 +129,7 @@ Otros cinco tipos                       &     66,614 &  0.21 \\
 La actualización periódica no se simula: la fuente crece realmente una hora cada hora. El sistema la incorpora por dos vías que comparten el mismo código.
 
 \begin{itemize}[leftmargin=*]
-    \item \textbf{Presente (Airflow).} El DAG se ejecuta cada hora y procesa el archivo de la hora \texttt{data\_interval\_start} menos un retraso configurable (\texttt{GHARCHIVE\_LAG\_HOURS = 2}), porque GH Archive publica cada archivo con una demora de una a dos horas.
+    \item \textbf{Presente (Airflow).} El DAG se ejecuta cada hora y procesa el archivo de la hora \texttt{data\_interval\_start} menos un retraso configurable (\texttt{GHARCHIVE\_LAG\_HOURS = 2}), porque GH Archive publica cada archivo con una demora de una a dos horas. Antes, la misma corrida repone las horas recientes que falten en \texttt{pipeline\_runs} (Sección~\ref{subsec:recuperacion}).
     \item \textbf{Pasado (carga histórica).} El \textit{script} \repo{scripts/backfill_days.py}{scripts/backfill\_days.py} recorre un rango de fechas configurable e invoca, hora por hora, las mismas funciones que usa el DAG. Así se cargó el periodo del 1 de octubre al 10 de noviembre y se recuperaron después las horas que el planificador dejó sin procesar (Sección~\ref{subsec:fallo}).
 \end{itemize}
 
