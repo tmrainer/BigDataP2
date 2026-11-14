@@ -2,7 +2,7 @@
 \section{Dashboard Analítico}
 \label{sec:dashboard}
 
-El tablero está construido con Streamlit y Plotly (\repo{dashboard/app.py}{dashboard/app.py}) y \textbf{consulta en vivo las tres bases de datos}: no lee archivos exportados ni resultados intermedios. Se publica en el puerto 8501 del \textit{stack}.
+El tablero está construido con Streamlit y Plotly (\repo{dashboard/app.py}{dashboard/app.py}) y \textbf{consulta en vivo las tres bases de datos}: no lee archivos exportados ni resultados intermedios. Se publica en el puerto 8501 del \textit{stack}; en el despliegue de Google Cloud es el único servicio accesible desde internet, en la dirección pública de la máquina virtual.
 
 \subsection{Estructura}
 
@@ -18,10 +18,10 @@ El tablero está construido con Streamlit y Plotly (\repo{dashboard/app.py}{dash
 \midrule
 Encabezado y tarjetas     & Cassandra & Periodo cargado, días completos y parciales, último dato, selector de fecha y los cinco KPI de la fecha elegida. \\
 Indicadores (KPI)         & Las tres  & Una ficha por KPI: definición, fórmula, interpretación, cálculo con los datos de la fecha, lectura, evolución y consulta de implementación. \\
-Actividad temporal        & Cassandra & Eventos por hora y tipo (Gráfico 1), composición del día (Gráfico 2), evolución diaria (Gráfico 3), rankings de repositorios y usuarios (Tablas 1 y 2). \\
+Actividad temporal        & Cassandra & Eventos por hora y tipo (Gráfico 1), composición del día (Gráfico 2), evolución diaria con la serie del flujo estable (Gráfico 3), rankings de repositorios y usuarios (Tablas 1 y 2). \\
 Red de colaboración       & Neo4j     & Tamaño del grafo, relaciones por tipo (Gráfico 4), repositorios por grado (Gráfico 5), vecindario de un repositorio (Gráfico 6, Tabla 3). \\
 Documentos fuente         & MongoDB   & Conteos y conciliación con Cassandra, ciclo de vida de los \textit{pull requests} (Gráfico 7), muestra de documentos (Tabla 4). \\
-Metodología y calidad     & Cassandra & Cobertura de la carga día por día, flujo de datos, justificación por base de datos y notas de interpretación. \\
+Metodología y calidad     & Cassandra & Cobertura de la carga día por día, con las horas que traen \textit{push}; flujo de datos, justificación por base de datos y notas de interpretación. \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -33,13 +33,13 @@ El enunciado valora la claridad en la presentación de los indicadores. Se adopt
 \begin{itemize}[leftmargin=*]
     \item \textbf{Cada gráfico se explica a sí mismo.} Todos los gráficos y tablas están numerados y llevan debajo una \textit{lectura}, una frase generada con los datos mostrados que dice qué se observa, y la \textit{fuente}, con la base de datos y la tabla de origen.
     \item \textbf{El color identifica el origen del dato.} Naranja para Cassandra, verde oliva para MongoDB y marrón para Neo4j, tanto en el borde de las tarjetas de los KPI como en las fichas y en el diagrama de arquitectura. En los gráficos, el color se reserva para las cuatro categorías principales y el resto se agrupa en un tono neutro. Toda la interfaz usa una única paleta cálida sobre fondo crema, con rellenos atenuados para no saturar la vista.
-    \item \textbf{El tablero no oculta los datos incompletos.} Un día con menos de 24 horas se marca como parcial, sus barras se dibujan en un tono más claro con el número de horas cargadas, y el crecimiento diario se calcula solo sobre las horas comparables.
+    \item \textbf{El tablero no oculta los datos incompletos.} Un día con menos de 24 horas se marca como parcial, sus barras se dibujan en un tono más claro con el número de horas cargadas, y el crecimiento diario se calcula solo sobre las horas comparables. Tampoco oculta la cobertura irregular de la fuente: el gráfico de evolución diaria superpone al volumen total la serie del flujo estable, y la tarjeta del KPI~1 indica cuántas horas del día traen \textit{push}.
     \item \textbf{Las consultas son visibles.} Las fichas de los indicadores y las pestañas de cada base muestran las consultas CQL, Cypher o de agregación que las alimentan, lo que permite demostrar durante la exposición que los datos provienen efectivamente de cada base.
 \end{itemize}
 
 \subsection{Capturas}
 
-Todas las capturas corresponden a la fecha de análisis del lunes 12 de octubre de 2026. Se tomaron unas horas después del corte de datos de este informe, con el DAG en funcionamiento, por lo que los totales acumulados que muestran (documentos en MongoDB, nodos y relaciones del grafo) son ligeramente superiores a los de las tablas de las secciones anteriores; los valores del 12 de octubre no cambian. Las cinco fichas de la pestaña de indicadores se presentaron en la Sección~\ref{sec:kpis} (Figuras de los KPI 1 a 5).
+Todas las capturas corresponden a la fecha de análisis del lunes 12 de octubre de 2026. Se tomaron sobre el \textit{dashboard} público de la máquina virtual inmediatamente después del corte de datos, con los 44 días completos cargados, por lo que los totales acumulados que muestran (documentos en MongoDB, nodos y relaciones del grafo) coinciden con los de las tablas de las secciones anteriores. Las cinco fichas de la pestaña de indicadores se presentaron en la Sección~\ref{sec:kpis} (Figuras de los KPI 1 a 5).
 
 \begin{figure}[H]
     \centering
@@ -58,7 +58,7 @@ Todas las capturas corresponden a la fecha de análisis del lunes 12 de octubre 
 \begin{figure}[H]
     \centering
     \includegraphics[width=\textwidth]{dash-cassandra-dia.png}
-    \caption{Gráfico 3: eventos procesados por día en todo el periodo. Los escalones corresponden a la presencia o ausencia del flujo de referencias de Git en la fuente (Sección~\ref{subsec:cobertura}); las dos barras claras del extremo derecho son días parciales.}
+    \caption{Gráfico 3: eventos procesados por día en todo el periodo. Las barras siguen la presencia o ausencia del flujo de referencias de Git en la fuente (Sección~\ref{subsec:cobertura}); la línea, que representa el flujo estable, se mantiene casi plana en todo el periodo.}
     \label{fig:dash-cassandra-dia}
 \end{figure}
 
@@ -93,7 +93,7 @@ Todas las capturas corresponden a la fecha de análisis del lunes 12 de octubre 
 \begin{figure}[H]
     \centering
     \includegraphics[width=\textwidth]{dash-cobertura.png}
-    \caption{Pestaña \guillemotleft{}Metodología y calidad de datos\guillemotright{}: cobertura de la carga día por día (extracto), construida a partir de \texttt{events\_by\_hour} y de la tabla de trazabilidad \texttt{pipeline\_runs}.}
+    \caption{Pestaña \guillemotleft{}Metodología y calidad de datos\guillemotright{}: cobertura de la carga día por día (extracto), con las horas que traen \textit{push}, construida a partir de \texttt{events\_by\_hour} y de la tabla de trazabilidad \texttt{pipeline\_runs}.}
     \label{fig:dash-cobertura}
 \end{figure}
 

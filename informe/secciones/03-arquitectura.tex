@@ -75,15 +75,15 @@ El grado de un repositorio, su vecindario o los colaboradores a dos saltos se ob
 
 \paragraph{Cassandra: la respuesta precalculada.} El tablero formula siempre las mismas preguntas (eventos por hora de un día, ranking de repositorios de un día, serie diaria). Cassandra invierte el diseño habitual: primero se define la consulta y luego la tabla que la responde. El costo de escritura es bajo y predecible, y la lectura no depende del volumen total almacenado sino del tamaño de una partición.
 
-\paragraph{Neo4j: la relación como dato de primera clase.} Las 2.5 millones de relaciones usuario--repositorio del periodo se almacenan como aristas físicas. Preguntar por los usuarios distintos conectados a un repositorio es contar las aristas entrantes de un nodo, no escanear una tabla de hechos.
+\paragraph{Neo4j: la relación como dato de primera clase.} Los 2.6 millones de relaciones usuario--repositorio del periodo se almacenan como aristas físicas. Preguntar por los usuarios distintos conectados a un repositorio es contar las aristas entrantes de un nodo, no escanear una tabla de hechos.
 
 \subsection{Componentes y Despliegue}
 
-Todo el sistema se ejecuta en contenedores Docker definidos en un único archivo \repo{docker-compose.yml}{docker-compose.yml}. Las tres bases de datos corren localmente junto al orquestador, sin depender de servicios administrados externos; esta decisión evita los límites de los niveles gratuitos en la nube (512~MB en MongoDB Atlas, 200,000 nodos en Neo4j AuraDB), que el volumen del proyecto supera ampliamente.
+El sistema se ejecuta en contenedores Docker definidos en un único archivo \repo{docker-compose.yml}{docker-compose.yml}, desplegado en una máquina virtual de Google Cloud (Compute Engine, tipo \texttt{e2-standard-4}: 4~vCPU, 16~GB de RAM y disco de 80~GB, región \texttt{us-central1}). Las tres bases de datos corren en esa máquina y no en servicios administrados; esta decisión evita los límites de los niveles gratuitos (512~MB en MongoDB Atlas, 200,000 nodos en Neo4j AuraDB), que el volumen del proyecto supera ampliamente. La orquestación, en cambio, sí usa un servicio administrado: \textbf{Cloud Composer} ejecuta el DAG cada hora y se conecta a las bases por la red privada de la nube (Sección~\ref{subsec:composer}).
 
 \begin{table}[H]
 \centering
-\caption{Servicios del \textit{stack} (\texttt{docker-compose.yml})}
+\caption{Servicios del sistema: contenedores de \texttt{docker-compose.yml} en la máquina virtual y orquestador administrado}
 \label{tab:servicios}
 \vspace{0.2cm}
 \footnotesize
@@ -94,18 +94,23 @@ Todo el sistema se ejecuta en contenedores Docker definidos en un único archivo
 \texttt{mongo}             & \texttt{mongo:7}           & 27017 & Documentos originales. Límite 1.5~GB, caché WiredTiger 0.5~GB. \\
 \texttt{cassandra}         & \texttt{cassandra:4.1}     & 9042  & Agregados e indicadores. Límite 3~GB, \textit{heap} 2~GB. \\
 \texttt{neo4j}             & \texttt{neo4j:5}           & 7474, 7687 & Grafo. Límite 2.5~GB, \textit{heap} 1~GB, \textit{page cache} 512~MB. \\
-\texttt{airflow-scheduler} & Airflow 2.10.5 (Python 3.11) & --  & Planifica y ejecuta el DAG (\texttt{LocalExecutor}). \\
-\texttt{airflow-webserver} & Airflow 2.10.5             & 8080  & Interfaz web de Airflow. \\
+\texttt{airflow-scheduler} & Airflow 2.10.5 (Python 3.11) & --  & Planificador de respaldo en la máquina virtual (\texttt{LocalExecutor}); su DAG permanece en pausa mientras Composer está activo. \\
+\texttt{airflow-webserver} & Airflow 2.10.5             & 8080  & Interfaz web del Airflow de respaldo. \\
 \texttt{postgres}          & \texttt{postgres:15}       & --    & Metadatos de Airflow. \\
 \texttt{jupyter}           & imagen propia              & 8888  & \textit{Notebooks} de CRUD y scripts de carga histórica. \\
 \texttt{dashboard}         & Streamlit 1.66             & 8501  & Tablero analítico. \\
 \texttt{mongo-express}     & \texttt{mongo-express:1.0.2} & 8081 & Explorador web de MongoDB. \\
+\texttt{cassandra-web}     & \texttt{cassandra-web:v1.1.6} & 8083 & Explorador web de Cassandra, en modo de solo lectura. \\
+\midrule
+Cloud Composer 3           & Airflow 2.11.1 administrado & HTTPS & Planifica y ejecuta el DAG cada hora. Entorno pequeño, un \textit{worker} de 1~vCPU y 4~GB. \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Los nueve contenedores consumen en conjunto alrededor de 4.9~GB de memoria en operación (medición con \texttt{docker stats}: Neo4j 1.97~GB, Cassandra 1.43~GB, MongoDB 0.92~GB y el resto por debajo de 0.25~GB cada uno). Los límites de memoria por servicio están fijados de modo que el conjunto quepa en una máquina de 16~GB.
+Los diez contenedores consumen en conjunto alrededor de 7.5~GB de memoria en operación (medición con \texttt{docker stats} en la máquina virtual: Cassandra 2.42~GB, Neo4j 2.15~GB, MongoDB 0.98~GB, los dos procesos de Airflow 1.29~GB y el resto por debajo de 0.4~GB cada uno). Los límites de memoria por servicio están fijados de modo que el conjunto quepa en los 16~GB de la máquina.
 
-\paragraph{Portabilidad a la nube.} El mismo \texttt{docker-compose.yml} se despliega sin cambios en una máquina virtual. La carpeta \texttt{gcp/} del repositorio contiene los \textit{scripts} para crear en Google Cloud una instancia \texttt{e2-standard-4} (4~vCPU, 16~GB de RAM, disco de 50~GB), instalar Docker y abrir únicamente el puerto del \textit{dashboard}; los demás servicios escuchan en \texttt{127.0.0.1} y se acceden por túnel SSH. Las cifras de volumen y rendimiento de este informe se midieron en el equipo de desarrollo del grupo.
+\paragraph{Red y exposición.} El único puerto abierto a internet es el 8501 del \textit{dashboard}. Las interfaces de administración escuchan en \texttt{127.0.0.1} y se acceden por túnel SSH: Airflow, Jupyter y un explorador web propio para cada base de datos (Mongo Express para MongoDB, Cassandra Web para Cassandra y Neo4j Browser, incluido en la imagen de Neo4j), de modo que el contenido de las tres puede inspeccionarse directamente, además de a través del \textit{dashboard}. Los puertos de las tres bases de datos se publican además en la dirección interna de la máquina, alcanzable solo desde la red privada del proyecto, que es por donde se conecta Cloud Composer; el cortafuegos de la red no los abre al exterior, lo que se comprobó intentando la conexión desde fuera.
+
+\paragraph{Reproducibilidad.} La carpeta \texttt{gcp/} del repositorio contiene los \textit{scripts} para crear la instancia, instalar Docker, abrir el puerto del \textit{dashboard} y levantar el \textit{stack}. Las cifras de volumen de este informe se midieron en esa máquina virtual.
 
 \paragraph{Configuración.} Todos los parámetros (credenciales, rango de la carga histórica, tope de eventos por hora, retraso respecto a la publicación de la fuente) se leen de variables de entorno en \repo{src/config.py}{src/config.py}, de modo que el DAG, los \textit{notebooks} y el \textit{dashboard} comparten exactamente la misma configuración y las mismas funciones de conexión.

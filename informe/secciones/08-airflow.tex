@@ -2,7 +2,7 @@
 \section{Explicación del DAG de Airflow}
 \label{sec:airflow}
 
-La automatización se implementa en un único DAG, \texttt{github\_events\_pipeline}, definido en \repo{dags/github_events_dag.py}{dags/github\_events\_dag.py}. Contiene las seis etapas que exige el enunciado, encadenadas linealmente, y se ejecuta de forma programada cada hora.
+La automatización se implementa en un único DAG, \texttt{github\_events\_pipeline}, definido en \repo{dags/github_events_dag.py}{dags/github\_events\_dag.py}. Contiene las seis etapas que exige el enunciado, encadenadas linealmente, y se ejecuta de forma programada cada hora en Cloud Composer, el servicio administrado de Airflow de Google Cloud (Sección~\ref{subsec:composer}).
 
 \begin{figure}[H]
     \centering
@@ -84,7 +84,7 @@ Las tareas se comunican por XCom, pero \textbf{solo intercambian metadatos}: el 
 \texttt{max\_active\_runs}  & 1                 & Nunca hay dos corridas simultáneas, lo que protege las tablas diarias de Cassandra, que se actualizan leyendo y reescribiendo. \\
 \texttt{retries}            & 3                 & Reintentos automáticos por tarea. \\
 \texttt{retry\_delay}       & 5 minutos         & Espera entre reintentos; cubre el caso de que el archivo de la hora aún no esté publicado. \\
-Ejecutor                    & \texttt{LocalExecutor} & Las tareas corren como procesos del planificador. \\
+Ejecutor                    & según el entorno & Administrado por Composer en la nube; \texttt{LocalExecutor} en el Airflow de respaldo de la máquina virtual. \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -103,16 +103,48 @@ Un flujo programado debe poder reintentarse sin alterar el resultado. Cada etapa
     \item \textbf{Indicadores:} se recalculan completos y se sobrescriben por clave primaria (día, indicador).
 \end{itemize}
 
-\subsection{Evidencia de Ejecución}
+\subsection{Ejecución en Cloud Composer}
+\label{subsec:composer}
+
+El DAG se ejecuta en \textbf{Cloud Composer~3}, el servicio administrado de Apache Airflow de Google Cloud, con Airflow 2.11.1. El archivo del DAG es el mismo del repositorio, sin modificaciones; lo que cambia es dónde vive cada pieza (Tabla~\ref{tab:composer}).
+
+\begin{table}[H]
+\centering
+\caption{El mismo DAG en el Airflow del \textit{stack} y en Cloud Composer}
+\label{tab:composer}
+\vspace{0.2cm}
+\footnotesize
+\begin{tabular}{@{}p{2.9cm}p{5.4cm}p{6.2cm}@{}}
+\toprule
+\textbf{Aspecto} & \textbf{Airflow del \textit{stack} (máquina virtual)} & \textbf{Cloud Composer} \\
+\midrule
+Versión & Airflow 2.10.5 & Airflow 2.11.1 (Composer~3, entorno pequeño) \\
+\addlinespace
+Código & Carpetas \texttt{dags/} y \texttt{src/} montadas en el contenedor. & DAG y módulos de \texttt{src/} en la carpeta \texttt{dags/} del \textit{bucket} del entorno. \\
+\addlinespace
+Dependencias & Imagen Docker propia (\texttt{requirements.txt}). & Paquetes del entorno: \texttt{cassandra-driver} y \texttt{neo4j}; \texttt{pymongo} y \texttt{requests} ya vienen incluidos. \\
+\addlinespace
+Conexión a las bases & Nombres de servicio de Docker. & Dirección interna de la máquina virtual, por la red privada del proyecto. \\
+\addlinespace
+Archivos intermedios & Carpeta \texttt{data/} de la máquina. & Carpeta \texttt{data/} del \textit{bucket}, que Composer monta en sus \textit{workers}. \\
+\addlinespace
+Estado & DAG en pausa, como respaldo. & DAG activo, una corrida por hora. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La configuración no se duplicó: Composer recibe como variables de entorno los mismos parámetros que lee \repo{src/config.py}{src/config.py} (direcciones de las tres bases, tope de eventos por hora, retraso respecto a la fuente), de modo que el código no distingue en qué planificador corre. Dos detalles exigieron atención. Primero, las tareas de Composer no comparten disco local, así que la ruta de los archivos intermedios (\texttt{DATA\_DIR}) apunta a la carpeta del \textit{bucket} que el servicio monta en todos sus \textit{workers}. Segundo, el entorno se creó dentro de la red privada del proyecto para alcanzar los puertos de las bases sin abrirlos a internet.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\textwidth]{airflow-grafo.png}
-    \caption{Interfaz de Airflow: DAG activo con programación \texttt{@hourly}. A la izquierda, el historial de corridas por tarea; a la derecha, el grafo de las seis tareas.}
-    \label{fig:airflow-grafo}
+    \includegraphics[width=\textwidth]{airflow-composer.png}
+    \caption{Interfaz de Airflow en Cloud Composer (menú \guillemotleft{}Google Managed Airflow\guillemotright{}): DAG activo con programación \texttt{@hourly}. A la izquierda, las primeras corridas, todas exitosas; a la derecha, el grafo de las seis tareas.}
+    \label{fig:airflow-composer}
 \end{figure}
 
-Desde su activación, el 10 de noviembre de 2026 a las 14:36 UTC, hasta la captura de la Figura~\ref{fig:airflow-grafo}, el DAG registró 15 corridas: 14 exitosas y 1 fallida. Una corrida normal sobre una hora de noviembre (unos 3,500 eventos) completa las seis etapas en un tiempo de entre 7 y 21 segundos.
+La primera corrida que Composer completó sin ninguna intervención fue la programada a las 00:00 UTC del 14 de noviembre, que procesó el archivo de las 21:00 UTC del día 13: 8,504 eventos crudos, 8,503 válidos (uno rechazado por carecer de nombre de repositorio), 8,503 documentos insertados en MongoDB y 5,567 relaciones escritas en Neo4j. Las seis etapas terminaron en 2 minutos y 20 segundos, y al acabar el total del día coincidía entre MongoDB y las tablas de Cassandra. Cada tarea tarda más que en el Airflow del \textit{stack}, porque Composer la lanza en un proceso aislado y lee los archivos intermedios desde el \textit{bucket}; aun así, una hora de unos 8,000 eventos se procesa en menos de tres minutos, muy por debajo del intervalo de programación.
+
+\paragraph{Dos planificadores a la vez.} Al activar Cloud Composer, el DAG quedó activo al mismo tiempo en el Airflow del \textit{stack} y en Composer, y ambos iniciaron a las 23:00 UTC del 13 de noviembre la corrida de la misma hora (el archivo de las 20:00 UTC, con 11,791 eventos). El resultado fue correcto, y por las razones previstas en el diseño: los \textit{upserts} de MongoDB repartieron la inserción entre los dos procesos (6,470 documentos uno y los 5,321 restantes el otro, sin duplicados); la etapa de Cassandra del segundo planificador encontró la hora ya registrada en \texttt{pipeline\_runs} y omitió la agregación; y la de Neo4j se omitió por la marca \texttt{loaded\_neo4j}. Los conteos de ese día quedaron idénticos en MongoDB y en las cuatro tablas de Cassandra que lo acumulan. El caso confirma la idempotencia, pero también muestra su límite: la protección depende de que una corrida registre la hora antes de que la otra llegue a esa etapa. Aquí hubo margen porque la tarea de Composer falló primero, al no estar aún instalado el controlador de Cassandra, y se reintentó cinco minutos después. La medida correctiva fue dejar un único planificador activo: el DAG de la máquina virtual permanece en pausa.
 
 \subsection{Diagnóstico de la Corrida Fallida}
 \label{subsec:fallo}
@@ -130,4 +162,4 @@ PermissionError: [Errno 13] Permission denied:
 
 \paragraph{Corrección.} La escritura del archivo intermedio se cambió a una \textbf{escritura atómica}: se escribe en un archivo temporal propio del proceso y se reemplaza el destino con \texttt{os.replace}. Reemplazar una entrada de directorio solo requiere permiso sobre la carpeta, no sobre el archivo previo, por lo que el conflicto desaparece; además, un proceso interrumpido ya no puede dejar un archivo intermedio a medio escribir.
 
-\paragraph{Una segunda observación.} En \texttt{pipeline\_runs} faltan dos horas consecutivas: las 23:00 UTC del 10 de noviembre y las 00:00 UTC del 11. Corresponden a las corridas de las 01:00 y 02:00 UTC del día 11, que nunca se crearon porque el planificador no estuvo activo en ese intervalo (la corrida de las 00:00 UTC comenzó recién a las 04:49 UTC). Con \texttt{catchup=False} Airflow no repone esas corridas al reanudar. No es una pérdida de datos, puesto que los archivos siguen publicados en la fuente y el \textit{script} de carga histórica los incorpora, pero ilustra el costo de esa configuración: la continuidad depende de que el planificador no se detenga. El \textit{dashboard} hace visible la brecha al marcar el 10 de noviembre como día parcial, con 23 de 24 horas.
+\paragraph{Horas sin cargar.} Antes de fijar el corte de este informe se comparó \texttt{pipeline\_runs} con el calendario y faltaban 25 horas entre el 10 y el 13 de noviembre: la de las 23:00 UTC del día 10; las de las 00:00, 05:00 y 06:00 del 11; veinte horas seguidas del 12, de las 04:00 a las 23:00; y la de las 00:00 del 13. Todas corresponden a intervalos en que el planificador estuvo detenido y no creó las corridas; con \texttt{catchup=False} Airflow no las repone al reanudar. No fue una pérdida de datos: los 25 archivos seguían publicados en la fuente y se cargaron el 13 de noviembre con las mismas funciones del \textit{pipeline}, tras lo cual se recalcularon los indicadores de esos cuatro días. El registro quedó en 1,056 de 1,056 horas. El episodio ilustra el costo de esa configuración, porque la continuidad depende de que el planificador no se detenga, y fue uno de los motivos para confiar la orquestación a un servicio administrado.

@@ -3,7 +3,9 @@
 
 El presente proyecto implementa una arquitectura de datos \textit{multimodelo} que ingiere, de forma automática y cada hora, los eventos públicos de GitHub y los distribuye en tres bases de datos NoSQL según la naturaleza de cada dato: \textbf{MongoDB} conserva el documento original de cada evento, \textbf{Cassandra} almacena las series temporales y los agregados que alimentan los indicadores, y \textbf{Neo4j} modela las relaciones entre usuarios, repositorios y organizaciones. El flujo completo está orquestado por un DAG de \textbf{Apache Airflow} de seis etapas y se consume desde un \textit{dashboard} analítico en Streamlit conectado a las tres bases.
 
-La fuente es GH Archive, un archivo público que publica un fichero JSON comprimido por cada hora de actividad de GitHub. Al cierre de este informe (11 de noviembre de 2026, 03:00 UTC) el sistema había procesado \textbf{985 archivos horarios}, del 1 de octubre al 11 de noviembre de 2026, que suman \textbf{31,244,224 eventos} válidos: 625 veces el mínimo de 50,000 registros exigido por el enunciado.
+La fuente es GH Archive, un archivo público que publica un fichero JSON comprimido por cada hora de actividad de GitHub. Al corte de este informe (final del 13 de noviembre de 2026, UTC) el sistema había procesado los \textbf{1,056 archivos horarios} de 44 días completos, del 1 de octubre al 13 de noviembre de 2026, que suman \textbf{31,614,290 eventos} válidos: 632 veces el mínimo de 50,000 registros exigido por el enunciado.
+
+El sistema está desplegado en Google Cloud. Las tres bases de datos y el \textit{dashboard} corren en una máquina virtual de Compute Engine, y la ejecución horaria del DAG está a cargo de \textbf{Cloud Composer}, el servicio administrado de Airflow de la plataforma (Secciones~\ref{sec:arquitectura} y~\ref{sec:airflow}). Las cifras de volumen de este documento se midieron sobre ese despliegue.
 
 El trabajo se estructura siguiendo los entregables solicitados:
 
@@ -19,9 +21,9 @@ El trabajo se estructura siguiendo los entregables solicitados:
 Al igual que en la primera entrega, el informe no se limita a describir lo construido. Tres hallazgos obtenidos durante la operación del sistema se investigaron hasta su causa y se documentan con evidencia cuantitativa:
 
 \begin{itemize}[leftmargin=*]
-    \item \textbf{El volumen diario de eventos varía en un factor de 25 sin que la actividad real de GitHub haya cambiado.} Los días completos oscilan entre 81,054 y 2,073,894 eventos. Se revisaron los 985 archivos crudos y se comprobó que la diferencia no proviene de ningún filtro del \textit{pipeline}, sino de la propia fuente: los eventos de tipo \texttt{PushEvent}, \texttt{CreateEvent} y \texttt{DeleteEvent} aparecen y desaparecen en bloque del archivo publicado (Sección~\ref{subsec:cobertura}).
-    \item \textbf{El \textit{pipeline} descarta el 0.002\,\% de los datos.} De 31,244,816 eventos crudos, solo 190 se rechazan por validación y 402 por duplicados; ninguna hora alcanzó el tope de eventos configurado. El conteo de MongoDB coincide exactamente con el de la auditoría independiente sobre los archivos de origen (Sección~\ref{subsec:calidad}).
-    \item \textbf{Una corrida programada falló por un conflicto de permisos entre contenedores,} no por los datos. El diagnóstico a partir de los registros de Airflow llevó a reemplazar la escritura directa del archivo intermedio por una escritura atómica (Sección~\ref{subsec:fallo}).
+    \item \textbf{El volumen diario de eventos varía en un factor de 25 sin que la actividad real de GitHub haya cambiado.} Los días completos oscilan entre 81,042 y 2,073,806 eventos. Se revisaron los 1,056 archivos crudos y se comprobó que la diferencia no proviene de ningún filtro del \textit{pipeline}, sino de la propia fuente: los eventos de tipo \texttt{PushEvent}, \texttt{CreateEvent} y \texttt{DeleteEvent} aparecen y desaparecen en bloque del archivo publicado (Sección~\ref{subsec:cobertura}).
+    \item \textbf{El \textit{pipeline} descarta el 0.002\,\% de los datos.} De 31,614,891 eventos crudos, solo 197 se rechazan por validación y 404 por duplicados; ninguna hora alcanzó el tope de eventos configurado. El conteo de MongoDB coincide exactamente con el de la auditoría independiente sobre los archivos de origen (Sección~\ref{subsec:calidad}).
+    \item \textbf{Los fallos de operación no vinieron de los datos.} Una corrida falló por un conflicto de permisos entre contenedores, 25 horas quedaron sin cargar mientras el planificador estuvo detenido y, al activar Cloud Composer, dos planificadores procesaron la misma hora a la vez. Los tres casos se diagnosticaron con los registros de Airflow y la tabla de trazabilidad, y ninguno alteró los datos (Secciones~\ref{subsec:fallo} y~\ref{subsec:composer}).
 \end{itemize}
 
 \subsection*{Disponibilidad del Código}
@@ -37,6 +39,7 @@ Todo el código del proyecto (DAG, módulos del \textit{pipeline}, scripts de cr
 \texttt{scripts/}~creación de esquemas \quad
 \texttt{notebooks/}~CRUD \quad
 \texttt{dashboard/}~Streamlit \quad
+\texttt{gcp/}~despliegue \quad
 \texttt{informe/}~fuente \LaTeX{} de este documento}}
 \end{center}
 
