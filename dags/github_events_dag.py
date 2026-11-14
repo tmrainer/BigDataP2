@@ -12,6 +12,10 @@ Etapas (requisito del proyecto):
 
 Programación: cada hora. Cada corrida procesa la hora `data_interval_start - lag`,
 lo que implementa la actualización incremental del dataset.
+
+Antes de las 6 etapas, `recover_missing_hours` compara `pipeline_runs` con el calendario y
+repone las horas recientes que quedaron sin cargar (planificador detenido, corridas fallidas).
+Sustituye a `catchup`: cubre cualquier causa del hueco y está acotado por ventana y por corrida.
 """
 from __future__ import annotations
 
@@ -33,6 +37,12 @@ default_args = {
 
 
 # ---------------------------------------------------------------- callables
+def _recover(**ctx):
+    from extract import hour_to_process
+    from recover import recover_missing_hours
+    return recover_missing_hours(until=hour_to_process(reference=ctx["data_interval_start"]))
+
+
 def _extract(**ctx):
     from extract import extract, hour_to_process
     # data_interval_start = inicio de la hora programada; restamos el lag de publicación de GH Archive
@@ -79,6 +89,7 @@ with DAG(
     doc_md=__doc__,
 ) as dag:
 
+    t0 = PythonOperator(task_id="recover_missing_hours", python_callable=_recover)
     t1 = PythonOperator(task_id="extract_data", python_callable=_extract)
     t2 = PythonOperator(task_id="validate_and_clean", python_callable=_clean)
     t3 = PythonOperator(task_id="load_mongodb", python_callable=_mongo)
@@ -86,4 +97,4 @@ with DAG(
     t5 = PythonOperator(task_id="build_graph_neo4j", python_callable=_neo4j)
     t6 = PythonOperator(task_id="generate_kpis", python_callable=_kpis)
 
-    t1 >> t2 >> t3 >> t4 >> t5 >> t6
+    t0 >> t1 >> t2 >> t3 >> t4 >> t5 >> t6

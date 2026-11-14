@@ -26,6 +26,10 @@ NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
 
 MAX_EVENTS_PER_RUN = int(os.environ.get("MAX_EVENTS_PER_RUN", "60000"))
 GHARCHIVE_LAG_HOURS = int(os.environ.get("GHARCHIVE_LAG_HOURS", "2"))
+# Recuperación de horas faltantes (src/recover.py): ventana que se revisa en cada corrida del DAG
+# y máximo de horas que se reponen por corrida. Ventana 0 = desactivada.
+RECOVERY_WINDOW_HOURS = int(os.environ.get("RECOVERY_WINDOW_HOURS", "72"))
+RECOVERY_MAX_HOURS = int(os.environ.get("RECOVERY_MAX_HOURS", "6"))
 
 # --- Control de crecimiento (opcional). Con las 3 BDs en Docker local no hay límites de tier,
 # por eso los defaults son 0 (sin borrado). Se dejan configurables por si se usa un tier gratuito
