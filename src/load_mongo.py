@@ -1,14 +1,4 @@
-"""Etapa 3 - CARGA EN MONGODB
-Inserta los documentos limpios en la colección `events`. Idempotente: usa el id
-del evento de GitHub como _id y upserts en lote (bulk_write), así re-ejecutar
-una hora no duplica datos.
-
-Retención opcional (MONGO_RETENTION_HOURS > 0): después de cargar, se eliminan los documentos
-cuyo created_at sea anterior a (hora del lote - MONGO_RETENTION_HOURS), sin tocar el día en curso. Se mide
-en tiempo de evento, no en reloj, así que con la VM apagada no se pierde nada.
-El histórico agregado queda en Cassandra; MongoDB conserva la ventana reciente
-de documentos originales.
-"""
+"""etapa 3: upsert de los eventos limpios en mongodb (_id = id del evento)."""
 from __future__ import annotations
 
 import logging
@@ -41,10 +31,10 @@ def upsert_events(events: list[dict]) -> dict:
 
 
 def purge_old_events(reference_hour: datetime, retention_hours: int = MONGO_RETENTION_HOURS) -> int:
-    """Borra documentos con created_at < reference_hour - retention_hours. Devuelve cuántos."""
+    """borra documentos anteriores a reference_hour - retention_hours; devuelve cuantos."""
     if retention_hours <= 0:
         return 0
-    # nunca se recorta el día en curso: la etapa 4 recalcula los agregados diarios desde aquí
+    # no recorta el dia en curso: la etapa 4 lo relee
     cutoff = min(reference_hour - timedelta(hours=retention_hours),
                  reference_hour.replace(hour=0, minute=0, second=0, microsecond=0))
     res = mongo_db().events.delete_many({"created_at": {"$lt": cutoff}})

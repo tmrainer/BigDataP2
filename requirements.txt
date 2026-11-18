@@ -1,4 +1,4 @@
-# Drivers de las 3 bases de datos + utilidades. Compartido por Airflow, Jupyter y Dashboard.
+# drivers de las 3 bases y utilidades
 pymongo[srv]==4.10.1
 cassandra-driver==3.29.2
 neo4j==5.27.0

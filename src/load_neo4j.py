@@ -1,17 +1,5 @@
-"""Etapa 5 - CONSTRUCCIÓN DE RELACIONES Y CARGA EN NEO4J
-Fuente de datos: **Cassandra** (tabla `user_repo_interactions_by_hour`, escrita en la
-etapa 4). Cada fila (usuario, repo, tipo, conteo) se convierte en una arista
-(usuario)-[TIPO {count}]->(repo); el repo se cuelga de su organización si la tiene.
-Se usa MERGE + UNWIND por lotes.
-
-Idempotencia: se consulta `pipeline_runs.loaded_neo4j` (Cassandra); si la hora
-ya fue cargada en el grafo se omite, así un retry no vuelve a sumar `count`.
-
-Control de tamaño del grafo (opcional; necesario solo con un tier gratuito en la nube):
-  * Solo entran al grafo los NEO4J_TOP_REPOS repos y NEO4J_TOP_USERS usuarios
-    más activos de la hora.
-  * Poda: tras cargar, se eliminan los usuarios sin actividad (rel.last_seen) en
-    las últimas NEO4J_RETENTION_HOURS horas y los repos/orgs que queden huérfanos.
+"""etapa 5: convierte las interacciones de cassandra en aristas (usuario)-[tipo]->(repo) de neo4j.
+una hora ya cargada (pipeline_runs.loaded_neo4j > 0) se omite.
 """
 from __future__ import annotations
 
@@ -50,7 +38,7 @@ MATCH (r:Repo {name: row.repo})
 MERGE (r)-[:BELONGS_TO]->(o)
 """
 
-# Se ejecutan en sesión auto-commit (CALL ... IN TRANSACTIONS no admite transacción explícita)
+# corren en sesion auto-commit (CALL ... IN TRANSACTIONS lo exige)
 PRUNE_USERS = """
 MATCH (u:User)
 WHERE NOT EXISTS {
@@ -69,9 +57,9 @@ CALL { WITH o DETACH DELETE o } IN TRANSACTIONS OF 2000 ROWS
 COUNT_NODES = "MATCH (n) RETURN count(n) AS nodes"
 
 
-# ------------------------------------------------------------ fuente: Cassandra
+# --- fuente: cassandra
 def read_interactions(hour: datetime) -> list[dict]:
-    """Filas de user_repo_interactions_by_hour para la hora (una partición)."""
+    """filas de user_repo_interactions_by_hour de la hora."""
     s = cassandra_session()
     rows = s.execute(
         "SELECT actor_login, repo_name, event_type, event_count, org_login, first_seen "
@@ -89,7 +77,7 @@ def read_interactions(hour: datetime) -> list[dict]:
 
 
 def build_edges(interactions: list[dict]) -> tuple[dict, list[dict]]:
-    """Devuelve {rel_type: [rows]} y filas de organizaciones a partir de las interacciones."""
+    """devuelve {rel_type: [rows]} y las filas de organizaciones."""
     repo_act = Counter()
     user_act = Counter()
     for i in interactions:
@@ -135,7 +123,7 @@ def write_graph(by_rel: dict, org_rows: list[dict]) -> int:
 
 
 def prune_graph(reference_hour: datetime, retention_hours: int = NEO4J_RETENTION_HOURS) -> dict:
-    """Elimina usuarios inactivos desde (reference_hour - retention_hours) y nodos huérfanos."""
+    """borra usuarios inactivos desde reference_hour - retention_hours y nodos huerfanos."""
     if retention_hours <= 0:
         return {}
     cutoff = (reference_hour - timedelta(hours=retention_hours)).isoformat()

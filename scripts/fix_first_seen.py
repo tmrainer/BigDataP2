@@ -1,9 +1,6 @@
-"""Corrige `first_seen` en un grafo cargado fuera de orden cronológico (carga histórica en paralelo).
-
-Recorre las horas de pipeline_runs y, para cada arista de user_repo_interactions_by_hour, deja en
-`first_seen` la menor fecha observada. No cambia `count` ni crea nodos. La etapa 5 ya mantiene ese
-mínimo al cargar; este script solo repara lo cargado antes. Después: recompute_kpis.py --all (KPI 5).
-Uso: docker compose exec -T jupyter python scripts/fix_first_seen.py
+"""repara first_seen en un grafo cargado fuera de orden: deja la menor fecha observada.
+uso: docker compose exec -T jupyter python scripts/fix_first_seen.py
+despues: python scripts/recompute_kpis.py --all
 """
 import sys
 from datetime import datetime, timezone

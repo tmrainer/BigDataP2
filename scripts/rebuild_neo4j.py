@@ -1,9 +1,5 @@
-"""Reconstruye la capa 3 (Neo4j) desde la capa 2 (Cassandra).
-
-Vacía el grafo, pone pipeline_runs.loaded_neo4j = 0 en todas las horas y vuelve a ejecutar la
-etapa 5 hora por hora leyendo user_repo_interactions_by_hour. Útil tras cambiar el tope de
-eventos, el mapeo tipo->relación o si el grafo quedó inconsistente.
-Uso: docker compose exec -T jupyter python scripts/rebuild_neo4j.py
+"""reconstruye el grafo de neo4j desde cassandra: lo vacia y repite la etapa 5 hora por hora.
+uso: docker compose exec -T jupyter python scripts/rebuild_neo4j.py
 """
 import logging
 import sys

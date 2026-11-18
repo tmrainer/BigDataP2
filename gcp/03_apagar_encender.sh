@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# =====================================================================
-#  Control de costos: apagar la VM cuando no se trabaja (no se cobra CPU/RAM,
-#  solo el disco ~US$0.10/día). Los contenedores vuelven solos al encender
-#  (restart: unless-stopped).
-#  Uso:  bash gcp/03_apagar_encender.sh <PROJECT_ID> stop|start|status|delete
-# =====================================================================
+# apaga o enciende la vm para controlar costos
+# uso: bash gcp/03_apagar_encender.sh <PROJECT_ID> stop|start|status|delete
 set -euo pipefail
 PROJECT_ID="${1:?Uso: bash gcp/03_apagar_encender.sh <PROJECT_ID> stop|start|status|delete}"
 ACTION="${2:-status}"

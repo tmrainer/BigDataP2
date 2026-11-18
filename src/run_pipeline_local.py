@@ -1,10 +1,9 @@
-"""Ejecuta las 6 etapas sin Airflow (útil para probar desde Jupyter o la terminal
-y para hacer una carga inicial de varias horas y superar los 50,000 registros).
+"""corre las 6 etapas sin airflow.
 
-Uso:
-    python src/run_pipeline_local.py                      # la hora más reciente disponible
-    python src/run_pipeline_local.py 2026-11-09 14        # una hora específica (UTC)
-    python src/run_pipeline_local.py 2026-11-09 10 16     # rango de horas 10..16
+uso:
+    python src/run_pipeline_local.py                   # hora mas reciente
+    python src/run_pipeline_local.py 2026-11-09 14     # una hora (utc)
+    python src/run_pipeline_local.py 2026-11-09 10 16  # rango de horas
 """
 import logging
 import sys

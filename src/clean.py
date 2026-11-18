@@ -1,12 +1,4 @@
-"""Etapa 2 - VALIDACIÓN Y LIMPIEZA
-Reglas:
-  * Campos obligatorios: id, type, actor.login, repo.name, created_at.
-  * created_at debe parsear a datetime (ISO-8601 'Z').
-  * Deduplicación por id dentro del lote.
-  * Se recorta `payload` a lo relevante por tipo de evento (menos espacio, mismos KPIs).
-  * Se limita a MAX_EVENTS_PER_RUN eventos por corrida.
-Salida: archivo JSONL en data/processed/ + estadísticas de calidad.
-"""
+"""etapa 2: valida campos obligatorios, deduplica por id y recorta el payload."""
 from __future__ import annotations
 
 import json
@@ -31,7 +23,7 @@ def parse_ts(value: str) -> datetime | None:
 
 
 def trim_payload(event_type: str, payload: dict | None) -> dict:
-    """Conserva solo los campos del payload que usan los KPIs / el grafo."""
+    """deja solo los campos del payload que usan los kpis y el grafo."""
     p = payload or {}
     if event_type == "PushEvent":
         return {
@@ -58,7 +50,7 @@ def trim_payload(event_type: str, payload: dict | None) -> dict:
 
 
 def validate_event(raw: dict) -> tuple[dict | None, str | None]:
-    """Devuelve (evento_limpio, None) o (None, motivo_rechazo)."""
+    """devuelve (evento_limpio, None) o (None, motivo_rechazo)."""
     for k in REQUIRED_TOP:
         if k not in raw or raw[k] in (None, ""):
             return None, f"missing_{k}"
@@ -114,8 +106,7 @@ def clean_events(events: Iterable[dict], max_events: int = MAX_EVENTS_PER_RUN) -
 def write_processed(events: list[dict], source_file: str, dest_dir: Path = PROCESSED_DIR) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / source_file.replace(".json.gz", ".clean.jsonl")
-    # Escritura atómica (tmp + os.replace): si el archivo lo creó otro usuario (p. ej. jupyter uid 1000 y
-    # Airflow uid 50000 comparten data/), sobrescribirlo daría PermissionError; reemplazarlo no.
+    # escritura atomica: reemplazar evita PermissionError entre contenedores
     tmp = dest.with_name(dest.name + f".{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         for ev in events:
@@ -137,7 +128,7 @@ def read_processed(path: Path) -> list[dict]:
 
 
 def clean(extract_meta: dict) -> dict:
-    """Punto de entrada para el DAG."""
+    """entrada del dag."""
     from extract import iter_events
     events, stats = clean_events(iter_events(Path(extract_meta["path"])))
     dest = write_processed(events, extract_meta["source_file"])

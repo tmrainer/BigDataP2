@@ -1,6 +1,5 @@
-"""Recalcula el KPI 2 (crecimiento diario) en kpis_by_date; con --all, los 5 KPIs.
-Correr al terminar una carga histórica en paralelo: un día pudo calcular su KPI antes de completarse el día previo.
-Uso: python scripts/recompute_kpis.py [--start AAAA-MM-DD] [--end AAAA-MM-DD] [--all]
+"""recalcula el kpi 2 en kpis_by_date; con --all, los 5 kpis.
+uso: python scripts/recompute_kpis.py [--start AAAA-MM-DD] [--end AAAA-MM-DD] [--all]
 """
 from __future__ import annotations
 

@@ -1,7 +1,5 @@
-"""Rellena user_repo_interactions_by_hour para horas ya cargadas antes de que existiera la tabla.
-Lee los eventos de MongoDB (capa de documentos) hora por hora y escribe solo esa tabla; no toca
-los demás agregados ni el grafo. Idempotente: salta las horas que ya tienen filas.
-Uso: docker compose exec -T jupyter bash -c 'cd src && python ../scripts/backfill_interactions.py'
+"""rellena user_repo_interactions_by_hour desde mongodb para horas ya cargadas.
+uso: docker compose exec -T jupyter bash -c 'cd src && python ../scripts/backfill_interactions.py'
 """
 import logging
 import sys

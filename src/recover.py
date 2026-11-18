@@ -1,13 +1,4 @@
-"""RECUPERACIÓN DE HORAS FALTANTES
-Compara `pipeline_runs` (Cassandra) con el calendario y vuelve a pasar por las 6 etapas las
-horas de la ventana reciente que no tienen corrida completa: las que el planificador no llegó
-a crear mientras estuvo detenido y las que fallaron tras agotar los reintentos.
-
-Acotado por RECOVERY_WINDOW_HOURS (cuánto se mira hacia atrás) y RECOVERY_MAX_HOURS (cuántas
-horas se reponen por corrida, de la más antigua a la más reciente). Al terminar se recalculan
-los KPIs de las fechas posteriores a la más antigua repuesta, porque el KPI 2 y el KPI 5
-dependen de los días previos.
-"""
+"""repone las horas recientes sin corrida completa en pipeline_runs."""
 from __future__ import annotations
 
 import logging
@@ -21,9 +12,9 @@ log = logging.getLogger(__name__)
 
 
 def missing_hours(until: datetime, window_hours: int = RECOVERY_WINDOW_HOURS) -> list[datetime]:
-    """Horas de [until - window_hours, until) sin corrida completa en pipeline_runs, en orden cronológico."""
+    """horas de [until - window_hours, until) sin corrida completa, en orden."""
     s = cassandra_session()
-    # Airflow entrega un DateTime de pendulum y el driver de Cassandra solo sabe codificar datetime/date nativos
+    # el driver de cassandra no acepta el datetime de pendulum
     until = datetime.fromisoformat(until.isoformat())
     hours = [until - timedelta(hours=i) for i in range(window_hours, 0, -1)]
     done = set()
@@ -36,8 +27,7 @@ def missing_hours(until: datetime, window_hours: int = RECOVERY_WINDOW_HOURS) ->
 
 def recover_missing_hours(until: datetime, window_hours: int = RECOVERY_WINDOW_HOURS,
                           max_hours: int = RECOVERY_MAX_HOURS) -> dict:
-    """Repone hasta `max_hours` horas faltantes anteriores a `until`. Un fallo en una hora no
-    detiene las demás: queda pendiente para la corrida siguiente."""
+    """repone hasta max_hours horas faltantes; un fallo queda para la corrida siguiente."""
     from kpis import compute_kpis, save_kpis
     from run_pipeline_local import run_hour
 
@@ -57,6 +47,7 @@ def recover_missing_hours(until: datetime, window_hours: int = RECOVERY_WINDOW_H
             log.error("No se pudo reponer la hora %s: %s", hour, exc)
             summary["failed"].append(hour.isoformat())
 
+    # kpi 2 y 5 dependen de dias previos: recalcular las fechas posteriores
     if summary["recovered"]:
         s = cassandra_session()
         d = datetime.fromisoformat(summary["recovered"][0]).date() + timedelta(days=1)

@@ -1,21 +1,7 @@
-"""
-DAG: github_events_pipeline
-Pipeline multimodelo (MongoDB + Cassandra + Neo4j) sobre GitHub Events.
+"""dag github_events_pipeline: etl horario gh archive -> mongodb / cassandra / neo4j + kpis.
 
-Etapas (requisito del proyecto):
-  1. extract_data          -> descarga el archivo horario de GH Archive
-  2. validate_and_clean    -> valida, deduplica, recorta payload
-  3. load_mongodb          -> documentos originales (semiestructurados)
-  4. transform_load_cassandra -> agregados por hora/día (series temporales)
-  5. build_graph_neo4j     -> relaciones Usuario -> Repo
-  6. generate_kpis         -> indicadores -> Cassandra kpis_by_date
-
-Programación: cada hora. Cada corrida procesa la hora `data_interval_start - lag`,
-lo que implementa la actualización incremental del dataset.
-
-Antes de las 6 etapas, `recover_missing_hours` compara `pipeline_runs` con el calendario y
-repone las horas recientes que quedaron sin cargar (planificador detenido, corridas fallidas).
-Sustituye a `catchup`: cubre cualquier causa del hueco y está acotado por ventana y por corrida.
+recover_missing_hours repone las horas recientes sin cargar; luego corren las 6 etapas
+sobre la hora data_interval_start - lag.
 """
 from __future__ import annotations
 
@@ -36,7 +22,7 @@ default_args = {
 }
 
 
-# ---------------------------------------------------------------- callables
+# --- callables
 def _recover(**ctx):
     from extract import hour_to_process
     from recover import recover_missing_hours
@@ -45,7 +31,7 @@ def _recover(**ctx):
 
 def _extract(**ctx):
     from extract import extract, hour_to_process
-    # data_interval_start = inicio de la hora programada; restamos el lag de publicación de GH Archive
+    # resta el lag de publicacion de gh archive
     hour = hour_to_process(reference=ctx["data_interval_start"])
     log.info("Hora a procesar: %s", hour)
     return extract(hour)
@@ -76,7 +62,7 @@ def _kpis(ti, **_):
     return generate_kpis(ti.xcom_pull(task_ids="build_graph_neo4j"))
 
 
-# ---------------------------------------------------------------- DAG
+# --- dag
 with DAG(
     dag_id="github_events_pipeline",
     description="ETL horario GH Archive -> MongoDB / Cassandra / Neo4j + KPIs",

@@ -1,12 +1,11 @@
-"""Configuración centralizada: lee variables de entorno (.env) y expone
-conexiones a las 3 bases de datos. Usado por el DAG, los notebooks y el dashboard."""
+"""config central: variables de entorno y conexiones a las 3 bases."""
 import os
 from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Carga .env si existe (en Airflow/compose las variables ya vienen por env_file)
+# carga .env si existe
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
@@ -26,24 +25,19 @@ NEO4J_DATABASE = os.environ.get("NEO4J_DATABASE", "neo4j")
 
 MAX_EVENTS_PER_RUN = int(os.environ.get("MAX_EVENTS_PER_RUN", "60000"))
 GHARCHIVE_LAG_HOURS = int(os.environ.get("GHARCHIVE_LAG_HOURS", "2"))
-# Recuperación de horas faltantes (src/recover.py): ventana que se revisa en cada corrida del DAG
-# y máximo de horas que se reponen por corrida. Ventana 0 = desactivada.
+# horas faltantes: ventana a revisar y maximo por corrida (0 = desactivada)
 RECOVERY_WINDOW_HOURS = int(os.environ.get("RECOVERY_WINDOW_HOURS", "72"))
 RECOVERY_MAX_HOURS = int(os.environ.get("RECOVERY_MAX_HOURS", "6"))
 
-# --- Control de crecimiento (opcional). Con las 3 BDs en Docker local no hay límites de tier,
-# por eso los defaults son 0 (sin borrado). Se dejan configurables por si se usa un tier gratuito
-# en la nube (Atlas M0 = 512 MB, AuraDB Free = 200k nodos).
-# Retención en MongoDB medida en TIEMPO DE EVENTO: tras cargar una hora se borran los documentos
-# con created_at anterior a (hora - MONGO_RETENTION_HOURS). 0 = nunca.
+# retencion en mongodb por created_at, en horas (0 = nunca borra)
 MONGO_RETENTION_HOURS = int(os.environ.get("MONGO_RETENTION_HOURS", "0"))
-# Poda del grafo: usuarios sin actividad en las últimas N horas (y repos/orgs huérfanos). 0 = nunca.
+# poda del grafo: usuarios inactivos hace n horas (0 = nunca)
 NEO4J_RETENTION_HOURS = int(os.environ.get("NEO4J_RETENTION_HOURS", "0"))
-# Repos / usuarios más activos de cada lote que entran al grafo (acota nodos nuevos por hora)
+# tope de repos y usuarios por lote que entran al grafo
 NEO4J_TOP_REPOS = int(os.environ.get("NEO4J_TOP_REPOS", "10000"))
 NEO4J_TOP_USERS = int(os.environ.get("NEO4J_TOP_USERS", "20000"))
 
-# Tipos de evento que generan relaciones en el grafo
+# tipos de evento que generan relaciones en el grafo
 RELATION_BY_TYPE = {
     "PushEvent": "PUSHED",
     "WatchEvent": "STARRED",

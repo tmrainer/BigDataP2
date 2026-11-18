@@ -1,9 +1,5 @@
-"""Etapa 1 - EXTRACCIÓN
-Descarga el archivo horario de GH Archive (https://www.gharchive.org/):
-    https://data.gharchive.org/YYYY-MM-DD-H.json.gz   (H sin cero a la izquierda: 0..23)
-Cada archivo contiene todos los eventos públicos de GitHub de esa hora (~4k líneas
-JSON en 2026; 100k+ hasta 2025). Esto es la "actualización incremental": cada corrida del DAG
-procesa UNA hora nueva.
+"""etapa 1: descarga el archivo horario de gh archive.
+url: https://data.gharchive.org/YYYY-MM-DD-H.json.gz (H sin cero a la izquierda)
 """
 from __future__ import annotations
 
@@ -23,8 +19,7 @@ BASE_URL = "https://data.gharchive.org"
 
 
 def hour_to_process(reference: datetime | None = None, lag_hours: int = GHARCHIVE_LAG_HOURS) -> datetime:
-    """Hora (UTC, truncada) que se debe extraer. GH Archive publica cada archivo
-    con cierta demora, por eso se resta `lag_hours`."""
+    """hora utc a extraer; resta lag_hours por la demora de publicacion."""
     ref = reference or datetime.now(timezone.utc)
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
@@ -36,7 +31,7 @@ def archive_name(hour: datetime) -> str:
 
 
 def download_hour(hour: datetime, dest_dir: Path = RAW_DIR, force: bool = False) -> Path:
-    """Descarga el .json.gz de la hora indicada a dest_dir. Idempotente."""
+    """descarga el .json.gz de la hora; no repite si ya existe."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     name = archive_name(hour)
     dest = dest_dir / name
@@ -57,7 +52,7 @@ def download_hour(hour: datetime, dest_dir: Path = RAW_DIR, force: bool = False)
 
 
 def iter_events(path: Path) -> Iterator[dict]:
-    """Itera los eventos (uno por línea) de un archivo .json.gz sin cargarlo entero en RAM."""
+    """itera los eventos del .json.gz linea por linea."""
     with gzip.open(path, "rt", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -70,6 +65,6 @@ def iter_events(path: Path) -> Iterator[dict]:
 
 
 def extract(hour: datetime) -> dict:
-    """Punto de entrada para el DAG. Devuelve metadatos para XCom."""
+    """entrada del dag; devuelve metadatos para xcom."""
     path = download_hour(hour)
     return {"source_file": path.name, "path": str(path), "hour": hour.isoformat()}

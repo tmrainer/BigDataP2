@@ -1,15 +1,5 @@
-"""Etapa 4 - TRANSFORMACIÓN Y CARGA EN CASSANDRA
-Fuente de datos: **MongoDB** (colección `events`, capa de documentos originales). Se leen los
-eventos cuyo `created_at` cae dentro de la hora procesada y se agregan en las tablas
-orientadas a consulta:
-  events_by_hour, repo_activity_by_day, user_activity_by_day, daily_totals,
-  user_repo_interactions_by_hour (pares usuario->repo por hora; de aquí se alimenta Neo4j).
-Las tablas diarias no acumulan: para los repos y usuarios de la hora se recalcula en
-MongoDB el total del día y se escribe ese valor absoluto.
-
-Idempotencia: todas las escrituras son valores absolutos, así que repetir una hora (retry
-de Airflow, fallo a mitad de la escritura, dos planificadores) deja el mismo resultado.
-`pipeline_runs` registra las horas ya procesadas y solo evita rehacer el trabajo.
+"""etapa 4: agrega los eventos de la hora (leidos de mongodb) en las tablas de cassandra.
+todas las escrituras son valores absolutos: repetir una hora no duplica.
 """
 from __future__ import annotations
 
@@ -33,10 +23,9 @@ TYPE_TO_COL = {
 }
 
 
-# ------------------------------------------------------------ fuente: MongoDB
+# --- fuente: mongodb
 def read_events_from_mongo(hour: datetime) -> list[dict]:
-    """Eventos de la hora [hour, hour+1h) leídos de MongoDB (índice ix_created_at).
-    Solo se proyectan los campos que necesitan los agregados y el grafo."""
+    """eventos de [hour, hour+1h) en mongodb, solo los campos necesarios."""
     if hour.tzinfo is None:
         hour = hour.replace(tzinfo=timezone.utc)
     cur = mongo_db().events.find(
@@ -53,9 +42,9 @@ def read_events_from_mongo(hour: datetime) -> list[dict]:
     return events
 
 
-# ------------------------------------------------------------ registro de corridas
+# --- registro de corridas
 def get_pipeline_run(hour: datetime):
-    """Fila de pipeline_runs para la hora, o None si nunca se procesó."""
+    """fila de pipeline_runs de la hora, o None."""
     s = cassandra_session()
     return s.execute("SELECT * FROM pipeline_runs WHERE run_date=%s AND run_hour=%s",
                      (hour.date(), hour.hour)).one()
@@ -78,7 +67,7 @@ def mark_neo4j_loaded(hour: datetime, n_edges: int):
               (n_edges, hour.date(), hour.hour))
 
 
-# ------------------------------------------------------------ agregación
+# --- agregacion
 def aggregate(events: list[dict]) -> dict:
     by_hour = Counter()                       # (date, hour, type) -> n
     interactions = Counter()                  # (date, hour, login, repo, type) -> n
@@ -103,15 +92,14 @@ def aggregate(events: list[dict]) -> dict:
 
 
 def day_activity_from_mongo(d: date, repos: list[str], users: list[str]) -> tuple[dict, dict]:
-    """Totales del día D recalculados en MongoDB para los repos y usuarios indicados:
-    ({repo: {columna: n}}, {login: n})."""
+    """totales del dia en mongodb para esos repos y usuarios: ({repo: {col: n}}, {login: n})."""
     start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
     in_day = {"created_at": {"$gte": start, "$lt": start + timedelta(days=1)}}
     group = {"_id": "$repo.name", "total_events": {"$sum": 1}}
     for t, col in TYPE_TO_COL.items():
         group[col] = {"$sum": {"$cond": [{"$eq": ["$type", t]}, 1, 0]}}
     ev = mongo_db().events
-    # hint: recorrer solo el día por ix_created_at (con $in el planificador podría elegir ix_repo / ix_actor)
+    # hint: recorre solo el dia por ix_created_at
     opts = {"hint": "ix_created_at", "allowDiskUse": True}
     by_repo = {r["_id"]: r for r in ev.aggregate(
         [{"$match": {**in_day, "repo.name": {"$in": repos}}}, {"$group": group}], **opts)}
@@ -121,11 +109,11 @@ def day_activity_from_mongo(d: date, repos: list[str], users: list[str]) -> tupl
     return by_repo, by_user
 
 
-CONCURRENCY = 64   # peticiones en vuelo hacia Cassandra (60k eventos/h -> segundos en vez de minutos)
+CONCURRENCY = 64   # peticiones en vuelo hacia cassandra
 
 
 def _run_concurrent(session, stmt, params: list) -> list:
-    """Ejecuta `stmt` para cada tupla de `params` en paralelo; devuelve resultados en el mismo orden."""
+    """ejecuta stmt por cada tupla en paralelo; resultados en el mismo orden."""
     out = []
     for ok, res in execute_concurrent_with_args(session, stmt, params, concurrency=CONCURRENCY):
         if not ok:
@@ -135,7 +123,7 @@ def _run_concurrent(session, stmt, params: list) -> list:
 
 
 def write_interactions(agg: dict) -> int:
-    """user_repo_interactions_by_hour: la clave incluye la hora -> INSERT directo."""
+    """escribe user_repo_interactions_by_hour."""
     s = cassandra_session()
     ins = s.prepare("INSERT INTO user_repo_interactions_by_hour "
                     "(event_date, event_hour, actor_login, repo_name, event_type, event_count, org_login, first_seen) "
@@ -143,7 +131,7 @@ def write_interactions(agg: dict) -> int:
     params = []
     for (d, h, user, repo, t), n in agg["interactions"].items():
         org, ts = agg["inter_meta"][(d, h, user, repo, t)]
-        # UNSET_VALUE en vez de None: Cassandra no escribe tombstones por columnas ausentes
+        # UNSET_VALUE en vez de None: evita tombstones
         params.append((d, h, user, repo, t, n, org or UNSET_VALUE, ts))
     _run_concurrent(s, ins, params)
     return len(params)
@@ -158,8 +146,7 @@ def write_aggregates(agg: dict) -> dict:
     _run_concurrent(s, ins_hour, [(d, h, t, n) for (d, h, t), n in agg["by_hour"].items()])
     counts["events_by_hour"] = len(agg["by_hour"])
 
-    # repo_activity_by_day / user_activity_by_day: total del día recalculado en MongoDB para las
-    # claves de esta hora (valor absoluto: reescribirlo no acumula)
+    # tablas diarias: total del dia recalculado en mongodb (valor absoluto)
     ins_repo = s.prepare("INSERT INTO repo_activity_by_day (event_date, repo_name, pushes, stars, forks, issues, pull_requests, total_events) VALUES (?,?,?,?,?,?,?,?)")
     ins_user = s.prepare("INSERT INTO user_activity_by_day (event_date, actor_login, event_count) VALUES (?,?,?)")
     cols = ["pushes", "stars", "forks", "issues", "pull_requests", "total_events"]
@@ -170,10 +157,10 @@ def write_aggregates(agg: dict) -> dict:
         counts["repo_activity_by_day"] += len(repos)
         counts["user_activity_by_day"] += len(users)
 
-    # user_repo_interactions_by_hour (fuente de la etapa 5 / Neo4j)
+    # user_repo_interactions_by_hour: fuente de la etapa 5
     counts["user_repo_interactions_by_hour"] = write_interactions(agg)
 
-    # daily_totals: recalcular desde las tablas del día (exacto, no aproximado)
+    # daily_totals: recalculado desde las tablas del dia
     ins_day = s.prepare("INSERT INTO daily_totals (year, event_date, total_events, unique_users, unique_repos) VALUES (?,?,?,?,?)")
     for d in agg["users_by_day"]:
         total = sum(r.event_count for r in s.execute("SELECT event_count FROM events_by_hour WHERE event_date=%s", (d,)))

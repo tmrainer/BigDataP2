@@ -1,19 +1,13 @@
-"""Carga histórica por rango de días (configurable en .env).
+"""carga historica por rango de dias; airflow se encarga del presente.
 
-Variables (.env):
-    BACKFILL_START_DATE   primer día a cargar, YYYY-MM-DD (p. ej. 2026-10-01)
-    BACKFILL_END_DATE     último día; vacío = hoy (UTC). Las horas aún no publicadas se omiten.
-    MAX_EVENTS_PER_RUN    tope de eventos por hora (200000 = sin recorte en 2026)
+variables (.env): BACKFILL_START_DATE, BACKFILL_END_DATE (vacio = hoy), MAX_EVENTS_PER_RUN
 
-Uso (dentro del contenedor jupyter, con src/ en PYTHONPATH):
-    python scripts/backfill_days.py                          # rango del .env, secuencial
-    python scripts/backfill_days.py --parallel 3             # 3 días a la vez (particiones distintas en Cassandra)
+uso (contenedor jupyter):
+    python scripts/backfill_days.py                  # rango del .env
+    python scripts/backfill_days.py --parallel 3     # 3 dias a la vez
     python scripts/backfill_days.py --start 2026-10-05 --end 2026-10-07
 
-Idempotente: una hora con fila en pipeline_runs y loaded_neo4j > 0 se salta; una hora a medias
-se reintenta (cada etapa decide por sí sola qué omitir). Los días se procesan en paralelo, las
-horas de un mismo día siempre en secuencia (los agregados diarios se recalculan con lo cargado hasta esa hora).
-Airflow sigue encargándose del presente: este script es solo para el pasado.
+las horas ya completas en pipeline_runs se saltan.
 """
 from __future__ import annotations
 
@@ -38,7 +32,7 @@ def _env_date(name: str, default: date) -> date:
 
 
 def load_day(d: date) -> dict:
-    """Carga las 24 horas de un día (en este proceso). Devuelve resumen."""
+    """carga las 24 horas de un dia; devuelve resumen."""
     import requests
     from extract import hour_to_process
     from load_cassandra import get_pipeline_run
@@ -65,7 +59,7 @@ def load_day(d: date) -> dict:
                 summary["not_published"] += 1
             else:
                 summary["failed"].append(f"{h}: {exc}")
-        except Exception as exc:  # seguir con las demás horas; se reintenta al relanzar
+        except Exception as exc:  # sigue con las demas horas
             summary["failed"].append(f"{h}: {exc}")
     summary["minutes"] = round((time.time() - t0) / 60, 1)
     return summary

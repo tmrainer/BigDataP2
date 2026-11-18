@@ -1,22 +1,7 @@
-## Stack del Proyecto Grupal II - Big Data (UTEC)
-## TODO corre en Docker, en un solo host (VM e2-standard-4 de GCP o laptop con >= 12 GB RAM):
-##   mongo         MongoDB 7        documentos originales (eventos JSON)
-##   cassandra     Cassandra 4.1    series temporales / agregados / KPIs
-##   neo4j         Neo4j 5          grafo Usuario -> Repo -> Org
-##   postgres      metadata de Airflow
-##   airflow-*     orquestación (DAG de 6 etapas, cada hora)
-##   jupyter       exploración + notebooks CRUD (demo del video)
-##   dashboard     Streamlit conectado a las 3 BDs
-##   mongo-express UI web de MongoDB (opcional, para la demo)
-##   cassandra-web UI web de Cassandra (opcional, para la demo)
-##
-## Uso:
-##   cp .env.example .env
-##   docker compose up -d
-##   docker compose logs -f airflow-init   (esperar "Airflow inicializado")
-##
-## Los contenedores se hablan por nombre de servicio (mongo, cassandra, neo4j); por eso aquí se
-## sobreescriben las URIs. El .env conserva valores "localhost" para usarlos desde el host.
+# stack del proyecto: mongo, cassandra, neo4j, postgres (metadata airflow), airflow,
+# jupyter, dashboard, mongo-express y cassandra-web
+# uso: cp .env.example .env && docker compose up -d
+# las uris se sobreescriben aqui con los nombres de servicio
 
 x-db-env: &db-env
   MONGO_URI: mongodb://mongo:27017
@@ -59,7 +44,7 @@ x-airflow-common: &airflow-common
 
 services:
 
-  # ------------------------------------------------------------------ MongoDB
+  # --- mongodb
   mongo:
     image: mongo:7
     container_name: mongo
@@ -90,7 +75,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ---------------------------------------------------------------- Cassandra
+  # --- cassandra
   cassandra:
     image: cassandra:4.1
     container_name: cassandra
@@ -101,7 +86,7 @@ services:
       CASSANDRA_CLUSTER_NAME: bigdata_cluster
       CASSANDRA_DC: dc1
       CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
-      # Limitar memoria para convivir con el resto del stack en 16 GB
+      # limita memoria para convivir con el resto del stack
       MAX_HEAP_SIZE: 2G
       HEAP_NEWSIZE: 400M
     volumes:
@@ -122,7 +107,7 @@ services:
     environment:
       CASSANDRA_HOST: cassandra
       CASSANDRA_PORT: 9042
-      READ_ONLY: "true"       # solo consulta: el CRUD se demuestra desde los notebooks
+      READ_ONLY: "true"       # solo lectura
     ports:
       - "127.0.0.1:8083:8083"
     depends_on:
@@ -130,14 +115,14 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # -------------------------------------------------------------------- Neo4j
+  # --- neo4j
   neo4j:
     image: neo4j:5
     container_name: neo4j
     hostname: neo4j
     ports:
-      - "127.0.0.1:7474:7474"     # Neo4j Browser (UI web)
-      - "127.0.0.1:7687:7687"     # Bolt (driver)
+      - "127.0.0.1:7474:7474"     # neo4j browser
+      - "127.0.0.1:7687:7687"     # bolt
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-bigdata2026}
       NEO4J_server_memory_heap_initial__size: 512m
@@ -154,7 +139,7 @@ services:
       start_period: 40s
     restart: unless-stopped
 
-  # ------------------------------------------------- Postgres (metadata Airflow)
+  # --- postgres (metadata airflow)
   postgres:
     image: postgres:15
     container_name: postgres
@@ -170,7 +155,7 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ------------------------------------------------------------------ Airflow
+  # --- airflow
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
@@ -212,7 +197,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # ------------------------------------------------------------------ Jupyter
+  # --- jupyter
   jupyter:
     build:
       context: .
@@ -236,7 +221,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ---------------------------------------------------------------- Dashboard
+  # --- dashboard
   dashboard:
     build:
       context: .
@@ -246,14 +231,14 @@ services:
     environment:
       <<: *db-env
       PYTHONPATH: /app/src
-      # Tema fijo claro y de alto contraste (no depende del navegador de quien lo abre)
+      # tema claro fijo
       STREAMLIT_THEME_BASE: light
       STREAMLIT_THEME_PRIMARY_COLOR: "#c2570f"
       STREAMLIT_THEME_BACKGROUND_COLOR: "#f8f1e4"
       STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR: "#efe4cf"
       STREAMLIT_THEME_TEXT_COLOR: "#2b1a10"
     ports:
-      - "8501:8501"          # público en la VM (regla de firewall allow-dashboard-8501)
+      - "8501:8501"          # publico en la vm
     volumes:
       - ./dashboard:/app/dashboard
       - ./src:/app/src

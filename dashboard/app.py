@@ -1,5 +1,5 @@
-"""Dashboard analítico (Streamlit) sobre MongoDB, Cassandra y Neo4j. Horas en UTC.
-Ejecutar: streamlit run dashboard/app.py
+"""dashboard streamlit sobre mongodb, cassandra y neo4j; horas en utc.
+uso: streamlit run dashboard/app.py
 """
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config  # noqa: E402
 from kpis import INTERMITTENT_TYPES  # noqa: E402
 
-# ------------------------------------------------------------------ estilo
+# --- estilo
 SERIES = ["#d9691e", "#6b3e24", "#e0a526", "#3f8a84", "#b23a2a", "#6b7329", "#c49a6c", "#8a4f6d"]
 INK, INK2, MUTED, GRID, AXIS = "#2b1a10", "#55392a", "#7a6250", "#e9dec9", "#c9b99f"
 BG, CARD, BAND, NEUTRAL = "#f8f1e4", "#fffaf0", "#efe4cf", "#a8957c"
 OTHER = "#c9b99f"
-FILL_ALPHA = 0.8  # rellenos atenuados: el tono identifica la serie sin saturar la vista
+FILL_ALPHA = 0.8  # rellenos atenuados
 MAIN_TYPES = 4
 ACCENT, ACCENT_SOFT = "#d9691e", "#f0c08f"
 POS, NEG = "#d9691e", "#6b3e24"
@@ -39,7 +39,7 @@ EVENT_ES = {
     "PublicEvent": "Repositorio hecho público", "GollumEvent": "Edición de wiki", "DiscussionEvent": "Discusión",
     "SponsorshipEvent": "Patrocinio",
 }
-# El color sigue al tipo, no a su posición en el ranking
+# el color sigue al tipo, no a su posicion en el ranking
 TYPE_ORDER = ["PullRequestEvent", "IssuesEvent", "IssueCommentEvent", "PullRequestReviewEvent", "WatchEvent",
               "PushEvent", "CreateEvent", "DeleteEvent"]
 TYPE_COLOR = dict(zip(TYPE_ORDER, SERIES))
@@ -242,7 +242,7 @@ ul.notes { margin:4px 0 0 1.1em; padding:0; font-size:.9rem; color:var(--ink2); 
 """
 
 
-# ------------------------------------------------------------------ utilidades de formato
+# --- utilidades de formato
 def esc(value) -> str:
     return html.escape(str(value))
 
@@ -317,7 +317,7 @@ def show(fig: go.Figure, height: int, key: str):
     st.plotly_chart(fig, theme=None, config=PLOTLY_CONFIG, key=key)
 
 
-# ------------------------------------------------------------------ bloques HTML
+# --- bloques html
 def section(title: str, lead: str = ""):
     st.html(f'<div class="sec"><div class="h">{title}</div>' + (f'<div class="p">{lead}</div>' if lead else "") + "</div>")
 
@@ -414,7 +414,7 @@ def hbar(labels, values, colors, text, hover, customdata=None, height=None) -> g
     return fig
 
 
-# ------------------------------------------------------------------ conexiones
+# --- conexiones
 @st.cache_resource(show_spinner=False)
 def cass():
     return config.cassandra_session()
@@ -438,7 +438,7 @@ def native(v):
     return v.to_native() if hasattr(v, "to_native") else v
 
 
-# ------------------------------------------------------------------ datos: Cassandra
+# --- datos: cassandra
 @st.cache_data(ttl=300, show_spinner=False)
 def hourly_all() -> pd.DataFrame:
     df = pd.DataFrame(list(cass().execute("SELECT event_date, event_hour, event_type, event_count FROM events_by_hour")))
@@ -459,7 +459,7 @@ def daily() -> pd.DataFrame:
     hours = h.groupby("event_date")["event_hour"].agg(lambda s: tuple(sorted(set(s))))
     df["hours"] = df["event_date"].map(lambda d: hours.get(d, ()))
     df["n_hours"] = df["hours"].map(len)
-    # tipos estables y cobertura de Push: GH Archive 2026 entrega Push/Create/Delete de forma intermitente
+    # tipos estables y cobertura de push (push/create/delete llegan de forma intermitente)
     stable = h[~h["event_type"].isin(INTERMITTENT_TYPES)].groupby("event_date")["event_count"].sum()
     push = h[(h["event_type"] == "PushEvent") & (h["event_count"] > 0)].groupby("event_date")["event_hour"].agg(
         lambda s: tuple(sorted(set(s))))
@@ -522,7 +522,7 @@ def repo_rank(dates: tuple[date, ...], k: int = 50) -> pd.DataFrame:
     df[REPO_COLS] = df[REPO_COLS].fillna(0).astype("int64")
     if len(frames) > 1:
         df = df.groupby("repo_name", as_index=False)[REPO_COLS].sum()
-    # solo el top-k de cada métrica: rankings exactos para N <= k sin cachear particiones completas
+    # solo el top-k de cada metrica, sin cachear particiones completas
     keep = set().union(*(df.nlargest(k, c)["repo_name"] for c in REPO_COLS))
     return df[df["repo_name"].isin(keep)].reset_index(drop=True)
 
@@ -550,7 +550,7 @@ def degree_of(repos: tuple[str, ...]) -> dict:
     return {r["repo"]: r["deg"] for r in recs}
 
 
-# ------------------------------------------------------------------ datos: Neo4j
+# --- datos: neo4j
 @st.cache_data(ttl=300, show_spinner=False)
 def graph_stats() -> dict:
     q = " UNION ALL ".join(f"MATCH (n:{label}) RETURN '{key}' AS k, count(n) AS n"
@@ -583,7 +583,7 @@ def ego(repo: str, n: int = 36) -> dict:
     return {**(info[0] if info else {"deg": 0, "inter": 0, "bots": 0, "org": None}), "users": users}
 
 
-# ------------------------------------------------------------------ datos: MongoDB
+# --- datos: mongodb
 @st.cache_data(ttl=300, show_spinner=False)
 def mongo_overview() -> dict:
     ev = mongo().events
@@ -617,7 +617,7 @@ def mongo_day(d: date) -> dict:
                         "accion": (r.get("payload") or {}).get("action") or "—"} for r in latest]}
 
 
-# ------------------------------------------------------------------ gráficos
+# --- graficos
 def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, dict]:
     totals = day.groupby("event_type")["event_count"].sum().sort_values(ascending=False)
     main = sorted([t for t in totals.index if t in TYPE_COLOR][:MAIN_TYPES], key=TYPE_ORDER.index)
@@ -764,7 +764,7 @@ def fig_ego(repo: str, eg: dict) -> go.Figure:
         grp = [u for u in users if u["main"] == t]
         if not grp:
             continue
-        # leyenda aparte: Plotly usaría el símbolo del primer punto (rombo si es bot)
+        # leyenda aparte: plotly usaria el simbolo del primer punto
         fig.add_scatter(x=[None], y=[None], mode="markers", name=REL_ES[t], marker=dict(size=10, color=REL_COLOR[t], opacity=FILL_ALPHA))
         fig.add_scatter(
             x=[u["x"] for u in grp], y=[u["y"] for u in grp], mode="markers", name=REL_ES[t], showlegend=False,
@@ -789,7 +789,7 @@ def fig_ego(repo: str, eg: dict) -> go.Figure:
     return fig
 
 
-# ================================================================== página
+# --- pagina
 st.set_page_config(page_title="GitHub Events · Dashboard analítico", page_icon=":material/monitoring:", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
@@ -809,7 +809,7 @@ first_d, last_d = dd["event_date"].iloc[0], dd["event_date"].iloc[-1]
 today_utc = datetime.now(timezone.utc).date()
 n_full = int((dd["n_hours"] >= 24).sum())
 
-# ------------------------------------------------------------------ encabezado
+# --- encabezado
 st.html(
     '<div class="hdr"><div class="overline">UTEC · Big Data · Proyecto Grupal II</div>'
     '<div class="title" role="heading" aria-level="1">Actividad pública en GitHub: dashboard analítico</div>'
@@ -820,7 +820,7 @@ st.html(
     f"<span><b>Último dato</b>{fdate(last_d)}, {max(cov[last_d]):02d}:59 UTC</span>"
     "<span><b>Actualización</b>cada hora (Airflow)</span><span><b>Zona horaria</b>UTC (Lima = UTC−5)</span></div></div>")
 
-# ------------------------------------------------------------------ filtros
+# --- filtros
 f1, f2, _ = st.columns([2.3, 2, 5])
 if st.session_state.get("fecha") not in cov:
     try:
@@ -842,7 +842,7 @@ if len(hrs) < 24:
             f"({hours_label(hrs)} UTC).</span>{hour_strip(hrs)}<span>{why} Los totales del día no son comparables con días "
             "completos; el crecimiento diario compara solo las horas presentes en ambos días.</span></div>")
 
-# ------------------------------------------------------------------ KPIs
+# --- kpis
 krow = kp[kp["event_date"] == sel].set_index("kpi_name")
 
 
@@ -913,7 +913,7 @@ if not krow.empty:
     foot += f"<span>Último cálculo de los KPI de esta fecha: {fdt(krow['computed_at'].max())}</span>"
 st.html(f'<div class="tiles-foot">{foot}</div>')
 
-# ------------------------------------------------------------------ pestañas por base de datos
+# --- pestanas por base de datos
 tab_k, tab_c, tab_g, tab_m, tab_doc = st.tabs(["Indicadores (KPI)", "Actividad temporal · Cassandra", "Red de colaboración · Neo4j",
                                                "Documentos fuente · MongoDB", "Metodología y calidad de datos"])
 kpiv = {name: dict(zip(g["event_date"], g["kpi_value"].where(g["kpi_value"].notna(), None))) for name, g in kp.groupby("kpi_name")}

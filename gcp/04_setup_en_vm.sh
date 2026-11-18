@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# =====================================================================
-#  Paso 4 (DENTRO de la VM, tras `git clone` del repo): levantar todo.
-#  Uso:  cd proyecto-bigdata && bash gcp/04_setup_en_vm.sh
-# =====================================================================
+# paso 4, dentro de la vm: levanta todo el stack
+# uso: cd proyecto-bigdata && bash gcp/04_setup_en_vm.sh
 set -euo pipefail
 SCRIPT="$(readlink -f "$0")"
 cd "$(dirname "$SCRIPT")/.."
 
 [ -f .env ] || { cp .env.example .env; echo ">> Se creó .env con valores por defecto (todo local)."; }
 
-# Docker sin sudo: el startup-script de la VM corre antes de que exista el usuario SSH, así que
-# no pudo agregarlo al grupo docker. Lo hacemos aquí y relanzamos el script con el grupo activo.
+# docker sin sudo: agrega el usuario al grupo docker y relanza el script
 if ! docker info >/dev/null 2>&1; then
   if ! id -nG "$USER" | grep -qw docker; then
     echo ">> Agregando $USER al grupo docker (una sola vez)..."
@@ -21,7 +18,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-# Permisos: Airflow corre como uid 50000 y Jupyter como uid 1000; ambos escriben en data/
+# airflow (uid 50000) y jupyter (uid 1000) escriben en data/
 mkdir -p data/raw data/processed
 chmod -R a+rwX data
 

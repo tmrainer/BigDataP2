@@ -1,10 +1,5 @@
-"""Crea colecciones, validador de esquema e índices en MongoDB.
-Uso: docker compose exec jupyter python scripts/init_mongo.py
-
-Justificación: MongoDB guarda el evento ORIGINAL (semiestructurado). El campo
-`payload` cambia de forma según `type` (PushEvent trae commits, IssuesEvent trae
-issue, WatchEvent casi nada), por eso el esquema es flexible y solo se exige
-la cabecera común.
+"""crea colecciones, validador de esquema e indices en mongodb.
+uso: docker compose exec jupyter python scripts/init_mongo.py
 """
 import os
 from pymongo import MongoClient, ASCENDING, DESCENDING
@@ -12,7 +7,7 @@ from pymongo import MongoClient, ASCENDING, DESCENDING
 client = MongoClient(os.environ["MONGO_URI"])
 db = client[os.environ.get("MONGO_DB", "github_events")]
 
-# Colección principal con validación ligera (solo campos de cabecera obligatorios)
+# coleccion principal: solo se valida la cabecera comun
 if "events" not in db.list_collection_names():
     db.create_collection(
         "events",
@@ -39,7 +34,7 @@ ev.create_index([("type", ASCENDING), ("created_at", DESCENDING)], name="ix_type
 ev.create_index([("repo.name", ASCENDING)], name="ix_repo")
 ev.create_index([("actor.login", ASCENDING)], name="ix_actor")
 
-# Colección de control de ingestas (idempotencia del DAG)
+# control de ingestas
 db.ingestion_log.create_index([("source_file", ASCENDING)], unique=True, name="ux_source_file")
 
 print("MongoDB inicializado en", db.name, "| colecciones:", db.list_collection_names())
