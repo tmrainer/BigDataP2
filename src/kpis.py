@@ -79,7 +79,6 @@ def compute_kpis(d: date) -> list[dict]:
     s = cassandra_session()
     today = _day_counts(s, d)
 
-    # cassandra
     events_today = sum(today.values())
     stable = sum(n for (h, t), n in today.items() if t not in INTERMITTENT_TYPES)
     hours = {h for (h, t) in today}
@@ -88,7 +87,6 @@ def compute_kpis(d: date) -> list[dict]:
     unique_users = row.unique_users if row else 0
     avg_per_user = events_today / unique_users if unique_users else 0.0
 
-    # mongodb
     merged = closed = 0
     try:
         acts = pr_actions_from_mongo(d)

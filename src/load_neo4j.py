@@ -57,7 +57,6 @@ CALL { WITH o DETACH DELETE o } IN TRANSACTIONS OF 2000 ROWS
 COUNT_NODES = "MATCH (n) RETURN count(n) AS nodes"
 
 
-# --- fuente: cassandra
 def read_interactions(hour: datetime) -> list[dict]:
     """filas de user_repo_interactions_by_hour de la hora."""
     s = cassandra_session()

@@ -10,9 +10,7 @@ auth = (os.environ.get("NEO4J_USER", "neo4j"), os.environ["NEO4J_PASSWORD"])
 db = os.environ.get("NEO4J_DATABASE", "neo4j")
 
 cypher = pathlib.Path(__file__).with_name("init_neo4j.cypher").read_text(encoding="utf-8")
-# quitar comentarios antes de separar por ';'
 code = "\n".join(l for l in cypher.splitlines() if not l.strip().startswith("//"))
-# separar statements
 statements = [s.strip() for s in code.split(";") if s.strip()]
 
 with GraphDatabase.driver(uri, auth=auth) as driver:

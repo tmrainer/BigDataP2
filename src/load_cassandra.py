@@ -23,7 +23,6 @@ TYPE_TO_COL = {
 }
 
 
-# --- fuente: mongodb
 def read_events_from_mongo(hour: datetime) -> list[dict]:
     """eventos de [hour, hour+1h) en mongodb, solo los campos necesarios."""
     if hour.tzinfo is None:
@@ -42,7 +41,6 @@ def read_events_from_mongo(hour: datetime) -> list[dict]:
     return events
 
 
-# --- registro de corridas
 def get_pipeline_run(hour: datetime):
     """fila de pipeline_runs de la hora, o None."""
     s = cassandra_session()
@@ -67,7 +65,6 @@ def mark_neo4j_loaded(hour: datetime, n_edges: int):
               (n_edges, hour.date(), hour.hour))
 
 
-# --- agregacion
 def aggregate(events: list[dict]) -> dict:
     by_hour = Counter()                       # (date, hour, type) -> n
     interactions = Counter()                  # (date, hour, login, repo, type) -> n
@@ -157,10 +154,8 @@ def write_aggregates(agg: dict) -> dict:
         counts["repo_activity_by_day"] += len(repos)
         counts["user_activity_by_day"] += len(users)
 
-    # user_repo_interactions_by_hour: fuente de la etapa 5
     counts["user_repo_interactions_by_hour"] = write_interactions(agg)
 
-    # daily_totals: recalculado desde las tablas del dia
     ins_day = s.prepare("INSERT INTO daily_totals (year, event_date, total_events, unique_users, unique_repos) VALUES (?,?,?,?,?)")
     for d in agg["users_by_day"]:
         total = sum(r.event_count for r in s.execute("SELECT event_count FROM events_by_hour WHERE event_date=%s", (d,)))

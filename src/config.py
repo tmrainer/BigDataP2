@@ -5,7 +5,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# carga .env si existe
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parents[1] / "data"))
@@ -37,7 +36,6 @@ NEO4J_RETENTION_HOURS = int(os.environ.get("NEO4J_RETENTION_HOURS", "0"))
 NEO4J_TOP_REPOS = int(os.environ.get("NEO4J_TOP_REPOS", "10000"))
 NEO4J_TOP_USERS = int(os.environ.get("NEO4J_TOP_USERS", "20000"))
 
-# tipos de evento que generan relaciones en el grafo
 RELATION_BY_TYPE = {
     "PushEvent": "PUSHED",
     "WatchEvent": "STARRED",

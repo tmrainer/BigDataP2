@@ -34,7 +34,6 @@ ev.create_index([("type", ASCENDING), ("created_at", DESCENDING)], name="ix_type
 ev.create_index([("repo.name", ASCENDING)], name="ix_repo")
 ev.create_index([("actor.login", ASCENDING)], name="ix_actor")
 
-# control de ingestas
 db.ingestion_log.create_index([("source_file", ASCENDING)], unique=True, name="ux_source_file")
 
 print("MongoDB inicializado en", db.name, "| colecciones:", db.list_collection_names())

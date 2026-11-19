@@ -22,7 +22,6 @@ default_args = {
 }
 
 
-# --- callables
 def _recover(**ctx):
     from extract import hour_to_process
     from recover import recover_missing_hours
@@ -62,7 +61,6 @@ def _kpis(ti, **_):
     return generate_kpis(ti.xcom_pull(task_ids="build_graph_neo4j"))
 
 
-# --- dag
 with DAG(
     dag_id="github_events_pipeline",
     description="ETL horario GH Archive -> MongoDB / Cassandra / Neo4j + KPIs",

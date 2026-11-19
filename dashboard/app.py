@@ -18,17 +18,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import config  # noqa: E402
 from kpis import INTERMITTENT_TYPES  # noqa: E402
 
-# --- estilo
 SERIES = ["#d9691e", "#6b3e24", "#e0a526", "#3f8a84", "#b23a2a", "#6b7329", "#c49a6c", "#8a4f6d"]
 INK, INK2, MUTED, GRID, AXIS = "#2b1a10", "#55392a", "#7a6250", "#e9dec9", "#c9b99f"
 BG, CARD, BAND, NEUTRAL = "#f8f1e4", "#fffaf0", "#efe4cf", "#a8957c"
 OTHER = "#c9b99f"
-FILL_ALPHA = 0.8  # rellenos atenuados
+FILL_ALPHA = 0.8
 MAIN_TYPES = 4
 ACCENT, ACCENT_SOFT = "#d9691e", "#f0c08f"
 POS, NEG = "#d9691e", "#6b3e24"
 FONT = "IBM Plex Sans, Inter, Segoe UI, system-ui, sans-serif"
 DB_COLOR = {"Cassandra": "#c2570f", "MongoDB": "#6b7329", "Neo4j": "#6b3e24"}
+
+DARK_MODE = st.session_state.get("modo_oscuro", False)
+if DARK_MODE:
+    INK, INK2, MUTED, GRID, AXIS = "#f3e6d5", "#ddc8b2", "#baa58e", "#44392f", "#79634e"
+    BG, CARD, BAND, NEUTRAL = "#201b17", "#2b241e", "#352c24", "#ad9479"
 
 EVENT_ES = {
     "PullRequestEvent": "Pull request", "IssuesEvent": "Issue", "IssueCommentEvent": "Comentario en issue/PR",
@@ -128,14 +132,20 @@ LAYOUT = dict(
     paper_bgcolor=BG, plot_bgcolor=BG, separators=".,",
     hoverlabel=dict(bgcolor=CARD, bordercolor="#cdbb9f", font=dict(color=INK, size=13, family=FONT), align="left"),
     xaxis=dict(showgrid=False, showline=True, linecolor=AXIS, ticks="", tickfont=dict(color=INK2, size=12),
-               title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=True, automargin=True),
+               title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=False, automargin=True),
     yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False, showline=False, tickfont=dict(color=INK2, size=12),
-               title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=True, automargin=True),
+               title=dict(font=dict(color=MUTED, size=12), standoff=10), fixedrange=False, automargin=True),
     legend=dict(orientation="h", x=0, xanchor="left", y=1.02, yanchor="bottom", font=dict(color=INK2, size=12),
                 bgcolor="rgba(0,0,0,0)", itemclick=False, itemdoubleclick=False),
     showlegend=False,
 )
-PLOTLY_CONFIG = {"displayModeBar": False}
+PLOTLY_CONFIG = {
+    "displayModeBar": "hover",
+    "displaylogo": False,
+    "scrollZoom": True,
+    "doubleClick": "reset",
+    "modeBarButtons": [["zoom2d", "pan2d", "zoomIn2d", "zoomOut2d", "resetScale2d"]],
+}
 
 CSS = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -241,8 +251,27 @@ ul.notes { margin:4px 0 0 1.1em; padding:0; font-size:.9rem; color:var(--ink2); 
 </style>
 """
 
+if DARK_MODE:
+    CSS += """
+<style>
+:root { --ink:#f3e6d5; --ink2:#ddc8b2; --muted:#baa58e; --hair:#44392f; --hair2:#574737; --rule:#79634e; --bg:#201b17; --card:#2b241e; --panel:#352c24; --brand:#ee9b60; color-scheme:dark; }
+[data-testid="stApp"], [data-testid="stHeader"], [data-testid="stToolbar"] { background:var(--bg); color:var(--ink); }
+[data-testid="stMarkdownContainer"], [data-testid="stText"], [data-testid="stCaptionContainer"], [data-testid="stIconMaterial"] { color:var(--ink); }
+[data-baseweb="select"] > div, [data-baseweb="popover"] > div, [data-baseweb="menu"], [role="listbox"], [role="option"], [data-baseweb="input"], [data-baseweb="input"] input { background:var(--card); color:var(--ink); }
+[data-testid="stSelectbox"] [role="group"], [data-testid="stSelectbox"] input, [data-testid="stSelectbox"] button { background:var(--card); color:var(--ink); }
+[role="option"]:hover, [aria-selected="true"][role="option"] { background:var(--panel); }
+[data-testid="stExpander"], [data-testid="stExpander"] details, [data-testid="stExpander"] summary { background:var(--bg); color:var(--ink); border-color:var(--hair2); }
+[data-testid="stCode"], [data-testid="stCode"] pre, [data-testid="stCode"] code, [data-testid="stCode"] span { background:var(--panel); color:var(--ink2); }
+[data-testid="stSlider"] [data-testid="stTickBar"], [data-testid="stSlider"] [data-testid="stThumbValue"] { color:var(--ink2); }
+[data-testid="stTooltipIcon"] svg, [data-baseweb="select"] svg { fill:var(--ink2); }
+.up { color:#c6cf7a; } .down { color:#f09380; }
+.badge.warn, .callout { color:#f2d29b; background:#44331d; border-color:#856231; }
+.badge.ok { color:#d2d99c; background:#323820; border-color:#69733d; }
+.strip i, .cb .tr { background:var(--hair2); }
+</style>
+"""
 
-# --- utilidades de formato
+
 def esc(value) -> str:
     return html.escape(str(value))
 
@@ -317,7 +346,6 @@ def show(fig: go.Figure, height: int, key: str):
     st.plotly_chart(fig, theme=None, config=PLOTLY_CONFIG, key=key)
 
 
-# --- bloques html
 def section(title: str, lead: str = ""):
     st.html(f'<div class="sec"><div class="h">{title}</div>' + (f'<div class="p">{lead}</div>' if lead else "") + "</div>")
 
@@ -414,7 +442,6 @@ def hbar(labels, values, colors, text, hover, customdata=None, height=None) -> g
     return fig
 
 
-# --- conexiones
 @st.cache_resource(show_spinner=False)
 def cass():
     return config.cassandra_session()
@@ -438,7 +465,6 @@ def native(v):
     return v.to_native() if hasattr(v, "to_native") else v
 
 
-# --- datos: cassandra
 @st.cache_data(ttl=300, show_spinner=False)
 def hourly_all() -> pd.DataFrame:
     df = pd.DataFrame(list(cass().execute("SELECT event_date, event_hour, event_type, event_count FROM events_by_hour")))
@@ -550,7 +576,6 @@ def degree_of(repos: tuple[str, ...]) -> dict:
     return {r["repo"]: r["deg"] for r in recs}
 
 
-# --- datos: neo4j
 @st.cache_data(ttl=300, show_spinner=False)
 def graph_stats() -> dict:
     q = " UNION ALL ".join(f"MATCH (n:{label}) RETURN '{key}' AS k, count(n) AS n"
@@ -583,7 +608,6 @@ def ego(repo: str, n: int = 36) -> dict:
     return {**(info[0] if info else {"deg": 0, "inter": 0, "bots": 0, "org": None}), "users": users}
 
 
-# --- datos: mongodb
 @st.cache_data(ttl=300, show_spinner=False)
 def mongo_overview() -> dict:
     ev = mongo().events
@@ -617,7 +641,6 @@ def mongo_day(d: date) -> dict:
                         "accion": (r.get("payload") or {}).get("action") or "—"} for r in latest]}
 
 
-# --- graficos
 def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, dict]:
     totals = day.groupby("event_type")["event_count"].sum().sort_values(ascending=False)
     main = sorted([t for t in totals.index if t in TYPE_COLOR][:MAIN_TYPES], key=TYPE_ORDER.index)
@@ -672,7 +695,7 @@ def fig_composition(totals: pd.Series, main: list[str]) -> go.Figure:
     detail = [t if t != "Otros" else " · ".join(f"{EVENT_ES.get(o, o)} {n:,}" for o, n in others.head(4).items()) for t, _ in rows]
     return hbar(labels, vals, [TYPE_COLOR.get(t, OTHER) for t, _ in rows],
                 [f"{v / total * 100:.1f} %  ·  {fnum(v)}" for v in vals],
-                "<b>%{y}</b><br>%{x:,} eventos<br><span style='color:#7a6250'>%{customdata}</span><extra></extra>",
+                "<b>%{y}</b><br>%{x:,} eventos<br><span style='color:" + MUTED + "'>%{customdata}</span><extra></extra>",
                 customdata=detail, height=420)
 
 
@@ -704,7 +727,7 @@ def fig_daily(dd: pd.DataFrame, sel: date) -> go.Figure:
         fig.add_annotation(x=pd.Timestamp(sel), y=float(srow["total_events"].iloc[0]), text="Seleccionado", showarrow=True,
                            arrowhead=0, arrowwidth=1, arrowcolor=INK2, ax=0, ay=-40, standoff=18 if srow["n_hours"].iloc[0] < 24 else 2,
                            xanchor="right" if pos > 0.9 else "left" if pos < 0.1 else "center", font=dict(size=11, color=INK),
-                           bgcolor="rgba(248,241,228,0.9)")
+                           bgcolor=BG if DARK_MODE else "rgba(248,241,228,0.9)")
     fig.update_layout(**layout(barmode="overlay", bargap=0.25, showlegend=True, hovermode="closest",
                                xaxis=date_axis(d0, d1, 16), yaxis={"tickformat": "~s", "title": {"text": "Eventos por día"}}))
     return fig
@@ -789,7 +812,6 @@ def fig_ego(repo: str, eg: dict) -> go.Figure:
     return fig
 
 
-# --- pagina
 st.set_page_config(page_title="GitHub Events · Dashboard analítico", page_icon=":material/monitoring:", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
@@ -809,7 +831,6 @@ first_d, last_d = dd["event_date"].iloc[0], dd["event_date"].iloc[-1]
 today_utc = datetime.now(timezone.utc).date()
 n_full = int((dd["n_hours"] >= 24).sum())
 
-# --- encabezado
 st.html(
     '<div class="hdr"><div class="overline">UTEC · Big Data · Proyecto Grupal II</div>'
     '<div class="title" role="heading" aria-level="1">Actividad pública en GitHub: dashboard analítico</div>'
@@ -820,8 +841,7 @@ st.html(
     f"<span><b>Último dato</b>{fdate(last_d)}, {max(cov[last_d]):02d}:59 UTC</span>"
     "<span><b>Actualización</b>cada hora (Airflow)</span><span><b>Zona horaria</b>UTC (Lima = UTC−5)</span></div></div>")
 
-# --- filtros
-f1, f2, _ = st.columns([2.3, 2, 5])
+f1, f2, appearance = st.columns([2.3, 2, 5])
 if st.session_state.get("fecha") not in cov:
     try:
         st.session_state["fecha"] = date.fromisoformat(st.query_params.get("fecha", ""))
@@ -833,6 +853,7 @@ sel = f1.selectbox("Fecha de análisis (UTC)", dates, key="fecha",
                    format_func=lambda d: fdate(d, weekday=True) + ("" if len(cov[d]) == 24 else f" — parcial ({len(cov[d])} h)"))
 st.query_params["fecha"] = str(sel)
 top_n = f2.slider("Elementos en rankings", 5, 20, 10)
+appearance.toggle("Modo oscuro", key="modo_oscuro")
 hrs = cov[sel]
 if len(hrs) < 24:
     kind = "Día en curso" if sel == today_utc else "Día parcial"
@@ -842,7 +863,6 @@ if len(hrs) < 24:
             f"({hours_label(hrs)} UTC).</span>{hour_strip(hrs)}<span>{why} Los totales del día no son comparables con días "
             "completos; el crecimiento diario compara solo las horas presentes en ambos días.</span></div>")
 
-# --- kpis
 krow = kp[kp["event_date"] == sel].set_index("kpi_name")
 
 
@@ -913,7 +933,6 @@ if not krow.empty:
     foot += f"<span>Último cálculo de los KPI de esta fecha: {fdt(krow['computed_at'].max())}</span>"
 st.html(f'<div class="tiles-foot">{foot}</div>')
 
-# --- pestanas por base de datos
 tab_k, tab_c, tab_g, tab_m, tab_doc = st.tabs(["Indicadores (KPI)", "Actividad temporal · Cassandra", "Red de colaboración · Neo4j",
                                                "Documentos fuente · MongoDB", "Metodología y calidad de datos"])
 kpiv = {name: dict(zip(g["event_date"], g["kpi_value"].where(g["kpi_value"].notna(), None))) for name, g in kp.groupby("kpi_name")}

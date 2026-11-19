@@ -2,18 +2,22 @@
 
 Proyecto Grupal II del curso de Big Data (UTEC).
 
-Integrantes: Percy Castro, Jorge Martínez, Carla Molina, Leonardo Montesinos, Yitzhak Namihas.
+Integrantes: Percy Castro, Jorge Martínez, Carla Molina, Leonardo Montesinos y Yitzhak Namihas.
 
-## Qué hace
+## ¿Qué hace el proyecto?
 
 Cada hora el sistema descarga los eventos públicos de GitHub que publica GH Archive
 (un archivo JSON comprimido por hora) y los reparte en tres bases NoSQL según el tipo de dato.
 Un DAG de Apache Airflow orquesta todo el flujo y un dashboard en Streamlit lee las tres bases.
 
-Al cierre del informe se habían procesado 1,056 archivos horarios (1 de octubre al 13 de
-noviembre de 2026): 31.6 millones de eventos.
+El objetivo es analizar la actividad de usuarios y repositorios combinando documentos,
+series temporales y relaciones de grafo. Los notebooks incluyen operaciones CRUD
+(crear, leer, actualizar y eliminar) para cada base de datos.
 
-## Cómo funciona
+Al cierre del informe se habían procesado 1 056 archivos horarios (del 1 de octubre al 13 de
+noviembre de 2026), equivalentes a 31,6 millones de eventos.
+
+## ¿Cómo funciona?
 
 ```
 GH Archive (un .json.gz por hora)
@@ -36,13 +40,17 @@ Las tres bases forman una cadena, no tres cargas paralelas: la etapa 4 lee los e
 MongoDB y la etapa 5 lee las interacciones de Cassandra. Cada capa se puede reconstruir desde
 la anterior.
 
-Por qué una base para cada cosa:
+La limpieza valida los campos obligatorios, elimina eventos duplicados por identificador
+y conserva los campos del `payload` utilizados en el análisis. Las fechas se procesan en
+UTC; para interpretarlas en Lima, se restan cinco horas.
+
+### ¿Por qué se utiliza una base de datos para cada tipo de información?
 
 | Base | Qué guarda | Por qué |
 |---|---|---|
 | MongoDB | El evento original | El campo `payload` cambia de forma según el tipo de evento; un documento lo admite sin esquema fijo. |
 | Cassandra | Conteos por hora y día, KPIs, registro de corridas | Series temporales: se escribe mucho y se lee por rango de fechas. Cada tabla responde una consulta del dashboard. |
-| Neo4j | Usuarios, repositorios y organizaciones con sus relaciones | Preguntas como "qué repositorio conecta a más usuarios" son recorridos de grafo. |
+| Neo4j | Usuarios, repositorios y organizaciones con sus relaciones | Preguntas como «¿Qué repositorio conecta a más usuarios?» se resuelven mediante recorridos de grafo. |
 
 Decisiones de diseño que conviene conocer:
 
@@ -51,22 +59,29 @@ Decisiones de diseño que conviene conocer:
   y Neo4j omite las horas ya cargadas. Repetir una hora no duplica nada.
 - **Recuperación.** La tabla `pipeline_runs` registra cada hora procesada. Si Airflow estuvo
   detenido o una corrida falló, la tarea 0 detecta el hueco y lo repone.
+  Por defecto, revisa las últimas 72 horas y recupera hasta seis por ejecución; estos límites
+  se ajustan en `.env`.
 
 ## Indicadores
 
 | KPI | Definición | Fuente |
 |---|---|---|
 | `events_per_day` | Eventos procesados en el día | Cassandra |
-| `daily_growth_pct` | Variación frente al día anterior | Cassandra |
+| `daily_growth_pct` | Variación de los tipos estables frente al día anterior, sobre las horas cargadas en ambos días | Cassandra |
 | `avg_events_per_user` | Eventos por usuario único | Cassandra |
-| `pr_merge_rate_pct` | Pull requests fusionados sobre los resueltos | MongoDB |
-| `top_repo_connections` | Repositorio con más usuarios distintos conectados | Neo4j |
+| `pr_merge_rate_pct` | Porcentaje de pull requests fusionados entre los cerrados del día | MongoDB |
+| `top_repo_connections` | Repositorio con más usuarios distintos conectados hasta el final del día | Neo4j |
 
 Las fórmulas y su interpretación están en el informe y en cada ficha del dashboard.
+Para comparar días, se debe revisar cuántas horas se han cargado. El crecimiento diario
+excluye `PushEvent`, `CreateEvent` y `DeleteEvent`, cuya cobertura es intermitente en los datos
+utilizados; si falta la base de comparación, se muestra como no disponible.
 
 ## Guía de uso
 
 Requisitos: Docker con Compose y unos 12 GB de RAM libres.
+Los comandos siguientes se ejecutan desde la raíz del repositorio en Bash (Linux, macOS o
+WSL en Windows). El archivo `.env` contiene la configuración local de las bases y del pipeline.
 
 ```bash
 cp .env.example .env
@@ -74,6 +89,7 @@ mkdir -p data/raw data/processed && chmod -R a+rwX data
 
 docker compose build
 docker compose up -d          # esperar a que todos los servicios estén healthy
+docker compose ps
 
 # esquemas de las tres bases
 docker exec -i cassandra cqlsh < scripts/init_cassandra.cql
@@ -84,7 +100,9 @@ docker compose exec -T jupyter python scripts/init_neo4j.py
 docker compose exec -T jupyter bash -c 'cd src && python run_pipeline_local.py'
 ```
 
-Desde ese momento Airflow carga una hora nueva cada hora sin intervención.
+En Airflow, verifica que el DAG `github_events_pipeline` esté activo. Desde ese momento,
+carga una hora nueva cada hora sin intervención. Se aplica un retraso de publicación de
+dos horas (`GHARCHIVE_LAG_HOURS=2`) antes de solicitar el archivo a GH Archive.
 
 Para cargar días anteriores:
 
@@ -108,6 +126,21 @@ Servicios una vez levantado el stack:
 | Cassandra Web | http://localhost:8083 | solo lectura |
 
 Para desplegarlo en Google Cloud están los scripts de `gcp/` y el paso a paso en `gcp/MANUAL.md`.
+
+### ¿Cómo se consulta el dashboard?
+
+Abre http://localhost:8501, selecciona la fecha de análisis y ajusta la cantidad de elementos
+en los rankings. Las pestañas permiten consultar los resultados de cada base de datos y las
+fichas explican la definición, fórmula e interpretación de los cinco indicadores.
+
+- **Apariencia:** el interruptor «Modo oscuro», junto a los filtros, permite alternar entre
+  el tema oscuro y el claro original.
+- **Zoom:** usa la rueda del ratón o arrastra sobre una gráfica para ampliar una zona. Al
+  pasar el cursor aparecen los controles para acercar, alejar y desplazar la vista. Un doble
+  clic o el botón de restablecer devuelve la escala inicial.
+
+Estas opciones solo cambian la visualización; los datos, indicadores y filtros de análisis
+se mantienen.
 
 ## Estructura del repositorio
 
