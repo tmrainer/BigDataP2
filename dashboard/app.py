@@ -1,5 +1,6 @@
-"""dashboard streamlit sobre mongodb, cassandra y neo4j; horas en utc.
-uso: streamlit run dashboard/app.py
+"""Dashboard Streamlit sobre MongoDB, Cassandra y Neo4j; horas en UTC.
+
+Uso: streamlit run dashboard/app.py
 """
 from __future__ import annotations
 
@@ -7,8 +8,10 @@ import html
 import math
 import re
 import sys
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -43,7 +46,7 @@ EVENT_ES = {
     "PublicEvent": "Repositorio hecho público", "GollumEvent": "Edición de wiki", "DiscussionEvent": "Discusión",
     "SponsorshipEvent": "Patrocinio",
 }
-# el color sigue al tipo, no a su posicion en el ranking
+# El color sigue al tipo, no a su posición en el ranking.
 TYPE_ORDER = ["PullRequestEvent", "IssuesEvent", "IssueCommentEvent", "PullRequestReviewEvent", "WatchEvent",
               "PushEvent", "CreateEvent", "DeleteEvent"]
 TYPE_COLOR = dict(zip(TYPE_ORDER, SERIES))
@@ -223,6 +226,9 @@ table.t tbody tr:last-child td { border-bottom:1px solid var(--rule); }
 table.t .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 table.t td.rk { color:var(--muted); width:2.2em; font-variant-numeric:tabular-nums; }
 table.t td.nm { font-weight:500; min-width:9em; }
+a.github-link { color:var(--ink); text-decoration:underline; text-underline-offset:3px; }
+a.github-link:hover { color:var(--brand); }
+a.github-link:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
 table.t td.nw { white-space:nowrap; }
 table.def td { vertical-align:top; font-size:.88rem; line-height:1.45; }
 table.def td code { white-space:normal; }
@@ -272,8 +278,44 @@ if DARK_MODE:
 """
 
 
-def esc(value) -> str:
+def esc(value: object) -> str:
+    """Escapa texto antes de incorporarlo al HTML del dashboard."""
     return html.escape(str(value))
+
+
+def github_link(value: object, kind: str) -> str:
+    """Enlaza nombres válidos; conserva como texto bots y nombres no reconocidos."""
+    name = str(value)
+    label = esc(name).replace("/", "/<wbr>")
+    parts = name.split("/")
+    valid_owner = re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", parts[0])
+    if kind == "repo":
+        valid = (len(parts) == 2 and valid_owner and parts[1] not in (".", "..")
+                 and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", parts[1]))
+    else:
+        valid = len(parts) == 1 and valid_owner
+    if not valid:
+        return label
+    url = "https://github.com/" + "/".join(quote(part, safe="") for part in parts)
+    return (f'<a class="github-link" href="{esc(url)}" target="_blank" rel="noopener noreferrer" '
+            f'title="{esc(f"Abrir {name} en GitHub (nueva pestaña)")}">{label}</a>')
+
+
+def filter_ranking(df: pd.DataFrame, column: str, query: str) -> pd.DataFrame:
+    """Filtra el ranking cargado por texto literal, conservando orden y posiciones."""
+    query = query.strip()
+    if not query:
+        return df
+    return df[df[column].str.contains(query, case=False, regex=False, na=False)]
+
+
+def download_csv(df: pd.DataFrame, filename: str, key: str, **context: object) -> None:
+    """Exporta una copia con contexto de fecha y UTF-8 compatible con Excel."""
+    st.download_button(
+        "Descargar CSV", data=df.assign(**context).to_csv(index=False).encode("utf-8-sig"),
+        file_name=filename, mime="text/csv", key=key, disabled=df.empty,
+        on_click="ignore",
+    )
 
 
 def fdate(d: date, weekday: bool = False, year: bool = True) -> str:
@@ -282,7 +324,12 @@ def fdate(d: date, weekday: bool = False, year: bool = True) -> str:
 
 
 def fnum(v: float) -> str:
-    return f"{v:,.0f}" if v < 1e5 else f"{v / 1e3:.1f} mil" if v < 1e6 else f"{v / 1e6:.2f} M"
+    """Abrevia cantidades con los mismos umbrales usados en las gráficas."""
+    if v < 1e5:
+        return f"{v:,.0f}"
+    if v < 1e6:
+        return f"{v / 1e3:.1f} mil"
+    return f"{v / 1e6:.2f} M"
 
 
 def tnum(v: float) -> str:
@@ -297,7 +344,8 @@ def fdt(ts: datetime) -> str:
     return f"{fdate(ts.date())}, {ts:%H:%M} UTC"
 
 
-def runs_of(values) -> list[tuple[int, int]]:
+def runs_of(values: Iterable[int]) -> list[tuple[int, int]]:
+    """Agrupa horas consecutivas para presentar la cobertura de forma compacta."""
     out: list[tuple[int, int]] = []
     for v in sorted(values):
         if out and v == out[-1][1] + 1:
@@ -307,11 +355,11 @@ def runs_of(values) -> list[tuple[int, int]]:
     return out
 
 
-def hours_label(hours) -> str:
+def hours_label(hours: Iterable[int]) -> str:
     return ", ".join(f"{a:02d}–{b:02d} h" if a != b else f"{a:02d} h" for a, b in runs_of(hours)) or "ninguna"
 
 
-def hour_strip(hours) -> str:
+def hour_strip(hours: Iterable[int]) -> str:
     on = set(hours)
     cells = "".join(f'<i class="{"on" if h in on else ""}{" g" if h and h % 6 == 0 else ""}" '
                     f'title="{h:02d}:00–{h:02d}:59 UTC"></i>' for h in range(24))
@@ -341,20 +389,20 @@ def date_axis(d0: date, d1: date, max_ticks: int) -> dict:
                 range=[pd.Timestamp(d0) - pd.Timedelta(hours=14), pd.Timestamp(d1) + pd.Timedelta(hours=14)])
 
 
-def show(fig: go.Figure, height: int, key: str):
+def show(fig: go.Figure, height: int, key: str) -> None:
     fig.update_layout(height=height)
     st.plotly_chart(fig, theme=None, config=PLOTLY_CONFIG, key=key)
 
 
-def section(title: str, lead: str = ""):
+def section(title: str, lead: str = "") -> None:
     st.html(f'<div class="sec"><div class="h">{title}</div>' + (f'<div class="p">{lead}</div>' if lead else "") + "</div>")
 
 
-def fig_head(num: str, title: str, sub: str = ""):
+def fig_head(num: str, title: str, sub: str = "") -> None:
     st.html(f'<div class="fig-t"><span class="n">{num}</span>{title}</div>' + (f'<div class="fig-s">{sub}</div>' if sub else ""))
 
 
-def fig_note(reading: str = "", source: str = ""):
+def fig_note(reading: str = "", source: str = "") -> None:
     parts = ([f"<b>Lectura.</b> {reading}"] if reading else []) + ([f'<span class="src"><b>Fuente.</b> {source}</span>'] if source else [])
     st.html('<div class="fig-note">' + "<br>".join(parts) + "</div>")
 
@@ -365,6 +413,7 @@ def stat(label: str, value: str, sub: str = "") -> str:
 
 def table_html(df: pd.DataFrame, cols: list[tuple[str, str, str]], bar: str | None = None, sorted_col: str | None = None,
                cls: str = "t") -> str:
+    """Renderiza tablas con formatos explícitos y enlaces de GitHub opcionales."""
     numeric = ("int", "pct", "dec")
     head = "".join(f'<th class="{"num" if k in numeric else ""}{" sorted" if c == sorted_col else ""}">{h}</th>'
                    for c, h, k in cols)
@@ -376,7 +425,7 @@ def table_html(df: pd.DataFrame, cols: list[tuple[str, str, str]], bar: str | No
             v = row.get(c)
             missing = v is None or (isinstance(v, float) and math.isnan(v))
             if kind == "rank":
-                tds.append(f'<td class="rk">{i}</td>')
+                tds.append(f'<td class="rk">{esc(row.get(c, i))}</td>')
             elif kind in numeric:
                 txt = "—" if missing else (f"{v:,.0f}" if kind == "int" else f"{v:.1f} %" if kind == "pct" else f"{v:,.2f}")
                 if c == bar and vmax > 0 and not missing:
@@ -385,8 +434,14 @@ def table_html(df: pd.DataFrame, cols: list[tuple[str, str, str]], bar: str | No
                 tds.append(f'<td class="num">{txt}</td>')
             elif kind == "html":
                 tds.append(f"<td>{'' if missing else v}</td>")
-            elif kind == "name":
-                tds.append(f'<td class="nm">{"—" if missing else esc(v).replace("/", "/<wbr>")}</td>')
+            elif kind in ("name", "repo", "user"):
+                if missing:
+                    label = "—"
+                elif kind == "name":
+                    label = esc(v).replace("/", "/<wbr>")
+                else:
+                    label = github_link(v, kind)
+                tds.append(f'<td class="nm">{label}</td>')
             else:
                 tds.append(f'<td class="{"nw" if kind == "nw" else ""}">{"—" if missing else esc(v)}</td>')
         body.append("<tr>" + "".join(tds) + "</tr>")
@@ -403,7 +458,8 @@ def kpi_tile(kd: dict, value: str, ctx: str, value_cls: str = "") -> str:
             f'<code>{kd["table"]}</code></div></div>')
 
 
-def kpi_section(kd: dict, sel: date, calc: str | None, calc_note: str, applied: str, chart_title: str, chart):
+def kpi_section(kd: dict, sel: date, calc: str | None, calc_note: str, applied: str, chart_title: str,
+                chart: Callable[[], None]) -> None:
     color = DB_COLOR[kd["db"]]
     impl = kd["impl"].replace("{d1}", str(sel - timedelta(days=1))).replace("{dn}", str(sel + timedelta(days=1)))
     with st.container(border=True):
@@ -485,7 +541,7 @@ def daily() -> pd.DataFrame:
     hours = h.groupby("event_date")["event_hour"].agg(lambda s: tuple(sorted(set(s))))
     df["hours"] = df["event_date"].map(lambda d: hours.get(d, ()))
     df["n_hours"] = df["hours"].map(len)
-    # tipos estables y cobertura de push (push/create/delete llegan de forma intermitente)
+    # Tipos estables y cobertura de Push (Push/Create/Delete llegan de forma intermitente).
     stable = h[~h["event_type"].isin(INTERMITTENT_TYPES)].groupby("event_date")["event_count"].sum()
     push = h[(h["event_type"] == "PushEvent") & (h["event_count"] > 0)].groupby("event_date")["event_hour"].agg(
         lambda s: tuple(sorted(set(s))))
@@ -548,7 +604,7 @@ def repo_rank(dates: tuple[date, ...], k: int = 50) -> pd.DataFrame:
     df[REPO_COLS] = df[REPO_COLS].fillna(0).astype("int64")
     if len(frames) > 1:
         df = df.groupby("repo_name", as_index=False)[REPO_COLS].sum()
-    # solo el top-k de cada metrica, sin cachear particiones completas
+    # Solo el top-k de cada métrica, sin cachear particiones completas.
     keep = set().union(*(df.nlargest(k, c)["repo_name"] for c in REPO_COLS))
     return df[df["repo_name"].isin(keep)].reset_index(drop=True)
 
@@ -616,7 +672,8 @@ def mongo_overview() -> dict:
     return {"total": ev.estimated_document_count(), "first": first and first["created_at"], "last": last and last["created_at"]}
 
 
-def _iso(doc):
+def _iso(doc: object) -> object:
+    """Convierte fechas de documentos anidados a su representación ISO-8601."""
     if isinstance(doc, dict):
         return {k: _iso(v) for k, v in doc.items()}
     if isinstance(doc, list):
@@ -639,6 +696,39 @@ def mongo_day(d: date) -> dict:
             "latest": [{"hora": r["created_at"].strftime("%H:%M:%S"), "tipo": EVENT_ES.get(r["type"], r["type"]),
                         "tecnico": r["type"], "usuario": r["actor"]["login"], "repo": r["repo"]["name"],
                         "accion": (r.get("payload") or {}).get("action") or "—"} for r in latest]}
+
+
+def fig_heatmap(hourly: pd.DataFrame, start: date, end: date) -> go.Figure:
+    """Muestra el volumen horario sin convertir horas ausentes en ceros."""
+    calendar = pd.date_range(start, end, freq="D").date
+    window = hourly[hourly["event_date"].between(start, end)]
+    counts = window.groupby(["event_date", "event_hour"])["event_count"].sum(min_count=1)
+    matrix = counts.unstack("event_hour").reindex(index=calendar, columns=range(24))
+    dates = [d.isoformat() for d in calendar]
+    missing = [[1 if pd.isna(value) else None for value in row] for row in matrix.to_numpy()]
+    values = [[None if pd.isna(value) else int(value) for value in row] for row in matrix.to_numpy()]
+    maximum = max((value for row in values for value in row if value is not None), default=0)
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(
+        x=list(range(24)), y=dates, z=missing, zmin=0, zmax=1,
+        colorscale=[[0, NEUTRAL], [1, NEUTRAL]], showscale=False, xgap=2, ygap=2,
+        hoverongaps=False, hovertemplate="%{y} · %{x:02d}:00 UTC<br>Sin datos<extra></extra>",
+    ))
+    fig.add_trace(go.Heatmap(
+        x=list(range(24)), y=dates, z=values, zmin=0, zmax=max(1, maximum),
+        colorscale=[[0, CARD], [0.5, ACCENT_SOFT], [1, ACCENT]], xgap=2, ygap=2,
+        colorbar=dict(title=dict(text="Eventos"), thickness=12, tickformat="~s"),
+        hoverongaps=False, hovertemplate="%{y} · %{x:02d}:00 UTC<br>%{z:,} eventos<extra></extra>",
+    ))
+    step = max(1, math.ceil(len(dates) / 20))
+    fig.update_layout(**layout(
+        xaxis={"title": {"text": "Hora (UTC)"}, "tickmode": "array", "tickvals": list(range(24)),
+               "ticktext": [f"{h:02d}" for h in range(24)], "showgrid": False},
+        yaxis={"type": "category", "autorange": "reversed", "tickmode": "array",
+               "tickvals": dates[::step], "ticktext": [fdate(d, year=False) for d in calendar[::step]],
+               "showgrid": False},
+    ))
+    return fig
 
 
 def fig_hourly(day: pd.DataFrame, hours: tuple[int, ...]) -> tuple[go.Figure, dict]:
@@ -933,6 +1023,19 @@ if not krow.empty:
     foot += f"<span>Último cálculo de los KPI de esta fecha: {fdt(krow['computed_at'].max())}</span>"
 st.html(f'<div class="tiles-foot">{foot}</div>')
 
+kpi_export = pd.DataFrame([
+    {
+        "indicador": kd["key"], "nombre": kd["name"], "fuente": kd["db"],
+        "valor": g_live if kd["key"] == "daily_growth_pct" else kval(kd["key"]),
+        "detalle": (f"Tipos estables en {len(common)} horas comunes con {prev}."
+                    if kd["key"] == "daily_growth_pct" else klabel(kd["key"])),
+        "origen_valor": "Recalculado en el dashboard" if kd["key"] == "daily_growth_pct" else "KPI guardado",
+    }
+    for kd in KPI_DEF
+])
+download_csv(kpi_export, f"indicadores_{sel}_utc.csv", "csv_kpis",
+             fecha_analisis_utc=sel, horas_cargadas=len(hrs))
+
 tab_k, tab_c, tab_g, tab_m, tab_doc = st.tabs(["Indicadores (KPI)", "Actividad temporal · Cassandra", "Red de colaboración · Neo4j",
                                                "Documentos fuente · MongoDB", "Metodología y calidad de datos"])
 kpiv = {name: dict(zip(g["event_date"], g["kpi_value"].where(g["kpi_value"].notna(), None))) for name, g in kp.groupby("kpi_name")}
@@ -1073,6 +1176,9 @@ with tab_c:
                 reading += " El feed de este día no trae eventos Push (intermitentes en GH Archive 2026)."
             fig_note(reading, "Cassandra · <code>events_by_hour</code>. Colores fijos por tipo, iguales en ambos gráficos.")
 
+    download_csv(day.sort_values(["event_hour", "event_type"]), f"eventos_horarios_{sel}_utc.csv",
+                 "csv_horarios", zona_horaria="UTC")
+
     section("Evolución diaria", "Todas las fechas cargadas. Las barras claras son días parciales y llevan encima las horas "
             "cargadas; los fines de semana van sombreados. La línea es la serie comparable entre días (tipos estables).")
     fig_head("Gráfico 3", "Eventos procesados por día", f"{fdate(first_d)} – {fdate(last_d)}")
@@ -1087,6 +1193,20 @@ with tab_c:
     else:
         reading = "Aún no hay días completos: todas las barras corresponden a días parciales."
     fig_note(reading, "Cassandra · <code>daily_totals</code> (totales) y <code>events_by_hour</code> (horas cargadas).")
+
+    with st.expander("Mapa de calor por día y hora"):
+        heat_periods = {"Últimos 7 días": 7, "Últimos 14 días": 14, "Últimos 30 días": 30,
+                        "Todo el periodo hasta la fecha seleccionada": None}
+        heat_period = st.selectbox("Periodo del mapa", list(heat_periods), index=1, key="periodo_mapa")
+        heat_days = heat_periods[heat_period]
+        heat_start = max(first_d, sel - timedelta(days=heat_days - 1)) if heat_days else first_d
+        st.caption(f"{fdate(heat_start)} – {fdate(sel)} · todos los tipos de evento · horas en UTC.")
+        show(fig_heatmap(hourly, heat_start, sel), min(720, max(280, 24 * ((sel - heat_start).days + 1) + 100)), "mapa_horario")
+        st.html(f'<div class="tnote"><span class="sw" style="background:{NEUTRAL}"></span> Sin datos · '
+                f'<span class="sw" style="background:{CARD};border:1px solid {AXIS}"></span> Cero eventos · '
+                f'<span class="sw" style="background:{ACCENT}"></span> Mayor actividad. '
+                'Las horas ausentes se mantienen sin datos. La intensidad también depende de la cobertura '
+                'de Push, creación y borrado de ramas; revisa los avisos de cobertura al comparar días.</div>')
 
     section("Repositorios y usuarios más activos", "Rankings de actividad. El periodo y el criterio de orden solo afectan a la Tabla 1.")
     o1, o2, _ = st.columns([2.4, 2, 4])
@@ -1104,24 +1224,44 @@ with tab_c:
             st.info("Sin actividad de repositorios para el periodo.")
         else:
             tr = rr.sort_values([order_col, "total_events", "repo_name"], ascending=[False, False, True]).head(top_n).copy()
+            tr.insert(0, "#", range(1, len(tr) + 1))
             try:
                 tr["usuarios"] = tr["repo_name"].map(degree_of(tuple(tr["repo_name"]))).fillna(0)
             except Exception:
                 tr["usuarios"] = None
             shown = [c for c in REPO_COLS if c in (order_col, "total_events") or tr[c].sum() > 0]
-            cols = [("#", "#", "rank"), ("repo_name", "Repositorio", "name")] + [(c, REPO_ES[c], "int") for c in shown]
+            cols = [("#", "#", "rank"), ("repo_name", "Repositorio", "repo")] + [(c, REPO_ES[c], "int") for c in shown]
             cols.append(("usuarios", "Usuarios (grafo)*", "int"))
-            st.html(table_html(tr, cols, bar=order_col, sorted_col=order_col)
+            repo_search = st.text_input("Buscar repositorio en este ranking", key="buscar_repositorio",
+                                        placeholder="Parte del nombre del repositorio",
+                                        help=f"Filtra los {len(tr)} repositorios de este ranking. Conserva sus posiciones originales.")
+            visible_repos = filter_ranking(tr, "repo_name", repo_search)
+            st.caption(f"{len(visible_repos)} de {len(tr)} repositorios del ranking. La búsqueda se limita a esta tabla.")
+            if visible_repos.empty:
+                st.info("No hay coincidencias en este ranking. Prueba otro nombre o borra la búsqueda.")
+            st.html(table_html(visible_repos, cols, bar=order_col, sorted_col=order_col)
                     + '<div class="tnote">Fuente: Cassandra · <code>repo_activity_by_day</code> (suma de las particiones diarias del '
                       "periodo). * Grado del repositorio en el grafo acumulado de Neo4j (todas las fechas), no solo el periodo. "
                       "GH Archive registra eventos, no estados: «Estrellas» son las recibidas en el periodo, no el total histórico."
                       + (" Las columnas sin actividad en el periodo se omiten." if len(shown) < len(REPO_COLS) else "") + "</div>")
+            download_csv(visible_repos[[c for c, _, _ in cols]].rename(columns={"#": "posicion"}),
+                         f"ranking_repositorios_{win[0]}_{win[-1]}_utc.csv", "csv_repositorios",
+                         fecha_analisis_utc=sel, inicio_periodo_utc=win[0], fin_periodo_utc=win[-1],
+                         alcance_usuarios_grafo="Acumulado: todas las fechas")
     with t2:
         fig_head("Tabla 2", "Top 10 usuarios del día", fdate(sel, weekday=True))
         ua = user_activity(sel)
         if ua:
             tu = pd.DataFrame(ua["top"])
-            st.html(table_html(tu, [("#", "#", "rank"), ("actor_login", "Usuario", "name"), ("event_count", "Eventos", "int"),
+            tu.insert(0, "#", range(1, len(tu) + 1))
+            user_search = st.text_input("Buscar usuario en este ranking", key="buscar_usuario",
+                                        placeholder="Parte del nombre del usuario",
+                                        help=f"Filtra los {len(tu)} usuarios de este ranking. Conserva sus posiciones originales.")
+            visible_users = filter_ranking(tu, "actor_login", user_search)
+            st.caption(f"{len(visible_users)} de {len(tu)} usuarios del ranking. La búsqueda se limita a esta tabla.")
+            if visible_users.empty:
+                st.info("No hay coincidencias en este ranking. Prueba otro nombre o borra la búsqueda.")
+            st.html(table_html(visible_users, [("#", "#", "rank"), ("actor_login", "Usuario", "user"), ("event_count", "Eventos", "int"),
                                     ("share", "% del día", "pct")], bar="event_count")
                     + f'<div class="tnote"><b>Lectura.</b> Las cuentas automatizadas (sufijo [bot]) son {ua["bot_users"]:,} de '
                       f'{ua["users"]:,} usuarios y generan el {ua["bot_events"] / ua["total"] * 100:.1f} % de los eventos. El 1 % más '
@@ -1129,6 +1269,8 @@ with tab_c:
                       f'{ua["median"]:.0f} evento{"" if ua["median"] == 1 else "s"} por usuario: unas pocas cuentas muy activas '
                       'elevan el promedio del KPI 3.<br>'
                       'Fuente: Cassandra · <code>user_activity_by_day</code>.</div>')
+            download_csv(visible_users.rename(columns={"#": "posicion"}), f"ranking_usuarios_{sel}_utc.csv",
+                         "csv_usuarios", fecha_analisis_utc=sel)
 
     with st.expander("Consultas CQL de esta pestaña"):
         st.code(f"""-- Gráficos 1 y 2: una partición (el día) de la tabla horaria
@@ -1187,6 +1329,9 @@ with tab_g:
                     note += (f" El KPI 5 del {fdate(sel, year=False)} ({esc(r5)}, {d5:,.0f} usuarios) corresponde al grafo "
                              "acumulado hasta esa fecha.")
                 fig_note(note, "Neo4j · grado por repositorio.")
+                st.html(f'<div class="tnote">Repositorio seleccionado: {github_link(repo, "repo")}</div>')
+                download_csv(gt, f"ranking_grafo_fecha_analisis_{sel}_utc.csv", "csv_grafo",
+                             fecha_analisis_utc=sel, alcance="Grafo acumulado: todas las fechas, independiente de la fecha de análisis")
         if not gt.empty:
             eg = ego(repo)
             if eg["users"]:
@@ -1207,10 +1352,12 @@ with tab_g:
                         "desde": fdate(min(r["desde"] for r in u["rels"] if r["desde"]).date(), year=False) if any(r["desde"] for r in u["rels"]) else "—",
                         "hasta": fdate(max(r["hasta"] for r in u["rels"] if r["hasta"]).date(), year=False) if any(r["hasta"] for r in u["rels"]) else "—",
                     } for u in sorted(eg["users"], key=lambda u: -(u["total"] or 0))[:12]])
-                    st.html(table_html(nb, [("usuario", "Usuario", "name"), ("rels", "Relaciones (interacciones)", "text"),
+                    st.html(table_html(nb, [("usuario", "Usuario", "user"), ("rels", "Relaciones (interacciones)", "text"),
                                             ("desde", "Primera", "nw"), ("hasta", "Última", "nw")])
                             + '<div class="tnote">Primera y última actividad: propiedades <code>first_seen</code> y '
                               "<code>last_seen</code> de las relaciones.</div>")
+                    download_csv(nb, f"usuarios_grafo_fecha_analisis_{sel}_utc.csv", "csv_vecindario",
+                                 fecha_analisis_utc=sel, repositorio=repo, alcance="Grafo acumulado: todas las fechas")
         with st.expander("Consultas Cypher de esta pestaña"):
             st.code("""// Gráfico 4: relaciones por tipo (Neo4j responde desde su count store)
 MATCH ()-[r:PUSHED]->() RETURN count(r)          // una consulta por tipo de relación
@@ -1273,8 +1420,8 @@ with tab_m:
         fig_head("Tabla 4", "Muestra de documentos del día", "los 10 eventos más recientes de la fecha (orden por created_at)")
         if md["latest"]:
             st.html(table_html(pd.DataFrame(md["latest"]), [("hora", "Hora (UTC)", "text"), ("tipo", "Tipo", "text"),
-                                                            ("tecnico", "Tipo técnico", "text"), ("usuario", "Usuario", "name"),
-                                                            ("repo", "Repositorio", "name"), ("accion", "payload.action", "text")]))
+                                                            ("tecnico", "Tipo técnico", "text"), ("usuario", "Usuario", "user"),
+                                                            ("repo", "Repositorio", "repo"), ("accion", "payload.action", "text")]))
         if md["sample"]:
             with st.expander("Ver el documento JSON completo del evento más reciente"):
                 st.json(md["sample"], expanded=True)

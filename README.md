@@ -17,6 +17,10 @@ series temporales y relaciones de grafo. Los notebooks incluyen operaciones CRUD
 Al cierre del informe se habían procesado 1 056 archivos horarios (del 1 de octubre al 13 de
 noviembre de 2026), equivalentes a 31,6 millones de eventos.
 
+![Vista de los cinco indicadores del dashboard](informe/dashboard_kpis.png)
+
+Captura incluida en el informe. Los valores corresponden a ese momento de la carga.
+
 ## ¿Cómo funciona?
 
 ```
@@ -82,14 +86,18 @@ utilizados; si falta la base de comparación, se muestra como no disponible.
 Requisitos: Docker con Compose y unos 12 GB de RAM libres.
 Los comandos siguientes se ejecutan desde la raíz del repositorio en Bash (Linux, macOS o
 WSL en Windows). El archivo `.env` contiene la configuración local de las bases y del pipeline.
+Para Windows con PowerShell, utiliza el bloque alternativo de abajo. Copia `.env.example`
+solo en una instalación nueva; conserva tu `.env` si ya configuraste el proyecto.
+
+### Inicio desde Bash o WSL
 
 ```bash
 cp .env.example .env
 mkdir -p data/raw data/processed && chmod -R a+rwX data
 
 docker compose build
-docker compose up -d          # esperar a que todos los servicios estén healthy
-docker compose ps
+docker compose up -d
+docker compose ps -a          # bases healthy; airflow-init termina con Exited (0)
 
 # esquemas de las tres bases
 docker exec -i cassandra cqlsh < scripts/init_cassandra.cql
@@ -100,6 +108,31 @@ docker compose exec -T jupyter python scripts/init_neo4j.py
 docker compose exec -T jupyter bash -c 'cd src && python run_pipeline_local.py'
 ```
 
+### Inicio desde PowerShell
+
+Abre Docker Desktop con el motor de contenedores Linux activo y ejecuta estos comandos
+desde la raíz del repositorio. `cqlsh -f` lee el archivo montado dentro de Cassandra y
+evita depender de la redirección `<` de Bash.
+
+```powershell
+if (-not (Test-Path -LiteralPath .env)) {
+    Copy-Item -LiteralPath .env.example -Destination .env
+}
+New-Item -ItemType Directory -Force -Path data/raw, data/processed | Out-Null
+
+docker compose build
+docker compose up -d
+docker compose ps -a
+
+# Esperar a que las bases estén healthy y airflow-init termine con Exited (0).
+docker compose exec -T cassandra cqlsh -f /scripts/init_cassandra.cql
+docker compose exec -T jupyter python scripts/init_mongo.py
+docker compose exec -T jupyter python scripts/init_neo4j.py
+
+# Primera carga: la hora más reciente publicada.
+docker compose exec -T jupyter python src/run_pipeline_local.py
+```
+
 En Airflow, verifica que el DAG `github_events_pipeline` esté activo. Desde ese momento,
 carga una hora nueva cada hora sin intervención. Se aplica un retraso de publicación de
 dos horas (`GHARCHIVE_LAG_HOURS=2`) antes de solicitar el archivo a GH Archive.
@@ -108,11 +141,13 @@ Para cargar días anteriores:
 
 ```bash
 # un día completo
-docker compose exec jupyter bash -c 'cd src && python run_pipeline_local.py 2026-11-09 0 23'
+docker compose exec -T jupyter python src/run_pipeline_local.py 2026-11-09 0 23
 
 # el rango definido en .env (BACKFILL_START_DATE y BACKFILL_END_DATE)
-docker compose exec jupyter python scripts/backfill_days.py --parallel 3
+docker compose exec -T jupyter python scripts/backfill_days.py --parallel 3
 ```
+
+Estos dos comandos de carga histórica también funcionan en PowerShell.
 
 Servicios una vez levantado el stack:
 
@@ -127,6 +162,43 @@ Servicios una vez levantado el stack:
 
 Para desplegarlo en Google Cloud están los scripts de `gcp/` y el paso a paso en `gcp/MANUAL.md`.
 
+### Configuración de referencia
+
+Los siguientes valores provienen de [`.env.example`](.env.example). Los límites de carga,
+recuperación y retención afectan al pipeline. Las opciones visuales del dashboard se
+ajustan en la propia página.
+
+| Variable | Valor de ejemplo | Uso |
+|---|---|---|
+| `MONGO_URI` | `mongodb://localhost:27017` | Conexión a MongoDB desde el equipo anfitrión. |
+| `MONGO_DB` | `github_events` | Base de datos de eventos. |
+| `CASSANDRA_HOST` | `localhost` | Servidor Cassandra desde el equipo anfitrión. |
+| `CASSANDRA_KEYSPACE` | `github_metrics` | Espacio de tablas de agregados y KPIs. |
+| `NEO4J_URI` | `bolt://localhost:7687` | Conexión Bolt desde el equipo anfitrión. |
+| `NEO4J_USER` | `neo4j` | Usuario de Neo4j. |
+| `NEO4J_PASSWORD` | `bigdata2026` | Contraseña inicial, aplicada al crear el volumen. |
+| `NEO4J_DATABASE` | `neo4j` | Base de datos del grafo. |
+| `MAX_EVENTS_PER_RUN` | `200000` | Máximo de eventos válidos por carga horaria; sigue siendo un límite numérico. |
+| `GHARCHIVE_LAG_HOURS` | `2` | Retraso en horas antes de solicitar un archivo a GH Archive. |
+| `RECOVERY_WINDOW_HOURS` | `72` | Ventana de horas recientes en la que se buscan cargas faltantes. |
+| `RECOVERY_MAX_HOURS` | `6` | Máximo de horas que se recuperan por ejecución; `0` desactiva la recuperación. |
+| `BACKFILL_START_DATE` | `2026-10-01` | Primera fecha de la carga histórica, incluida. |
+| `BACKFILL_END_DATE` | vacío | Última fecha, incluida; vacío utiliza el día actual en UTC. |
+| `MONGO_RETENTION_HOURS` | `0` | Retención en horas; `0` desactiva el borrado por antigüedad. |
+| `NEO4J_RETENTION_HOURS` | `0` | Antigüedad para podar usuarios inactivos; `0` desactiva la poda. |
+| `NEO4J_TOP_REPOS` | `10000` | Máximo de repositorios por lote que entran en las interacciones del grafo. |
+| `NEO4J_TOP_USERS` | `20000` | Máximo de usuarios por lote que entran en las interacciones del grafo. |
+| `AIRFLOW_ADMIN_USER` | `admin` | Usuario creado al inicializar Airflow. |
+| `AIRFLOW_ADMIN_PASSWORD` | `admin` | Contraseña inicial de Airflow. |
+| `AIRFLOW_UID` | `50000` | Valor de referencia incluido en el ejemplo; el Compose actual no lo usa para definir `user`. |
+| `JUPYTER_TOKEN` | `bigdata` | Token de acceso a Jupyter. |
+
+Dentro de Docker, el bloque `x-db-env` de [`docker-compose.yml`](docker-compose.yml)
+establece las conexiones entre servicios: `mongo`, `cassandra` y `neo4j`, además del
+usuario y la base `neo4j`. Las URI con `localhost` del ejemplo sirven para ejecutar
+código desde el equipo anfitrión. Si falta `MAX_EVENTS_PER_RUN` en el entorno,
+`src/config.py` utiliza `60000`, aunque el archivo de ejemplo propone `200000`.
+
 ### ¿Cómo se consulta el dashboard?
 
 Abre http://localhost:8501, selecciona la fecha de análisis y ajusta la cantidad de elementos
@@ -138,9 +210,61 @@ fichas explican la definición, fórmula e interpretación de los cinco indicado
 - **Zoom:** usa la rueda del ratón o arrastra sobre una gráfica para ampliar una zona. Al
   pasar el cursor aparecen los controles para acercar, alejar y desplazar la vista. Un doble
   clic o el botón de restablecer devuelve la escala inicial.
+- **Descargas CSV:** el botón situado bajo las tarjetas exporta los cinco KPI de la fecha
+  seleccionada, usando los mismos valores que muestra el dashboard, incluido el crecimiento
+  recalculado. En Cassandra puedes descargar los conteos horarios por tipo de evento y los
+  rankings visibles. Los CSV de rankings respetan la búsqueda y conservan las posiciones
+  originales. Los archivos usan UTF-8 con BOM para conservar las tildes al abrirlos en Excel.
+- **Búsqueda en rankings:** los campos de repositorio y usuario filtran por parte del nombre,
+  sin distinguir mayúsculas. Buscan dentro del ranking mostrado en la pestaña Cassandra;
+  el contador indica cuántas filas coinciden. Borra el texto para recuperar el ranking completo.
+- **Mapa de calor:** abre «Mapa de calor por día y hora» en la pestaña Cassandra. Puedes ver
+  los últimos 7, 14 o 30 días, o todo el periodo hasta la fecha seleccionada. Cada celda muestra
+  los eventos de una hora en UTC. El gris señala horas sin datos; el color inicial de la escala
+  representa cero eventos. El mapa incluye todos los tipos de evento, por lo que también
+  refleja los cambios de cobertura del feed.
+- **Enlaces a GitHub:** los nombres válidos de repositorios y usuarios en las tablas abren
+  su página en una pestaña nueva. Las cuentas con sufijo `[bot]` se conservan como texto,
+  porque ese identificador no garantiza un perfil público navegable.
+- **Rankings del grafo:** en Neo4j puedes descargar el ranking de repositorios y los usuarios
+  del vecindario mostrado. Estos CSV indican que su alcance es el grafo acumulado de todas
+  las fechas; la fecha de análisis incluida no limita ese grafo.
 
 Estas opciones solo cambian la visualización; los datos, indicadores y filtros de análisis
 se mantienen.
+
+### Aplicación conectada e instantánea HTML
+
+| Versión | Cómo abrirla | Datos y funciones |
+|---|---|---|
+| [`dashboard/app.py`](dashboard/app.py) | http://localhost:8501 con el stack activo | Aplicación Streamlit que consulta las tres bases. Incluye las descargas, búsquedas y el mapa de calor descritos arriba. |
+| [`dashboard/dashboard.html`](dashboard/dashboard.html) | Abrir el archivo en un navegador | Instantánea autónoma con datos incorporados, generada el 13 de noviembre de 2026 (UTC). Permite explorar esa captura sin levantar las bases; sus datos y funciones corresponden a la versión exportada. |
+
+La instantánea HTML no se regenera al ejecutar Airflow ni al cambiar la aplicación Streamlit.
+En Streamlit, las consultas utilizan una caché de cinco minutos, o diez minutos para el ranking
+de repositorios de Cassandra. Un nuevo cálculo del pipeline puede tardar ese intervalo en verse
+al volver a consultar la página. La cabecera muestra el último dato cargado y, bajo las tarjetas,
+la fecha del último cálculo guardado de los KPI.
+
+### Problemas frecuentes
+
+| Síntoma | Qué revisar |
+|---|---|
+| Docker no conecta o informa de un motor inexistente | Abrir Docker Desktop, activar el motor Linux y comprobar `docker info`. |
+| El dashboard muestra «Aún no hay datos» | Revisar los esquemas y ejecutar la primera carga de la guía. Confirmar que el DAG `github_events_pipeline` está activo. |
+| No se puede conectar a Cassandra, MongoDB o Neo4j | Consultar `docker compose ps -a` y los logs. Esperar a que las bases estén `healthy`; comprobar las conexiones de `x-db-env`. |
+| Neo4j rechaza la contraseña después de editar `.env` | La contraseña inicial se aplica cuando se crea el volumen. Conservar las credenciales vigentes o cambiarlas desde Neo4j; editar `.env` no cambia la contraseña almacenada. |
+| Aparecen días parciales o crecimiento `N/D` | Revisar las horas cargadas en «Metodología y calidad de datos». El crecimiento necesita horas comunes y una base de comparación mayor que cero en el día anterior. |
+| No aparecen inmediatamente los datos nuevos | Revisar el último dato cargado, el cálculo de los KPI y los intervalos de caché indicados arriba; volver a consultar al vencer la caché. |
+| Una búsqueda no devuelve resultados | Solo abarca el ranking visible. Borrar la búsqueda o ajustar el periodo, el criterio y la cantidad de repositorios del ranking. |
+
+Diagnóstico desde Bash o PowerShell:
+
+```bash
+docker info
+docker compose ps -a
+docker compose logs --tail=100 dashboard cassandra mongo neo4j airflow-scheduler
+```
 
 ## Estructura del repositorio
 
@@ -149,7 +273,7 @@ dags/        DAG de Airflow
 src/         una etapa del pipeline por archivo, más config, KPIs y recuperación
 scripts/     creación de esquemas y utilidades de carga histórica
 notebooks/   exploración del dataset, CRUD en cada base y KPIs
-dashboard/   aplicación Streamlit
+dashboard/   aplicación Streamlit e instantánea HTML autónoma
 docker/      imágenes de Airflow, Jupyter y dashboard
 gcp/         despliegue en Google Cloud
 informe/     informe técnico en LaTeX y PDF
